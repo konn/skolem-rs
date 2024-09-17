@@ -1,6 +1,6 @@
 use std::num::ParseIntError;
 
-use itertools::{intersperse, Itertools};
+use itertools::Itertools;
 
 use crate::types::*;
 
