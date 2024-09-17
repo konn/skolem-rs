@@ -1,0 +1,40 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cache Global Data
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{runner.os}}-build-cargo-${{hashFiles('**/Cargo.lock')}}
+        restore-keys: |
+          ${{runner.os}}-build-cargo-
+    - name: Cache Build cache
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{runner.os}}-build-target-${{hashFiles('**/Cargo.lock')}}-${{hashFiles('**/Cargo.toml')}}-${{hashFiles('**/*.rs')}}
+        restore-keys: |
+          ${{runner.os}}-build-target-${{hashFiles('**/Cargo.lock')}}-${{hashFiles('**/Cargo.toml')}}-
+          ${{runner.os}}-build-target-${{hashFiles('**/Cargo.lock')}}-
+          ${{runner.os}}-build-target-
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
