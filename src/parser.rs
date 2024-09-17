@@ -93,6 +93,8 @@ mod tests {
     }
 
     mod cnf {
+        use std::path::Path;
+
         use super::*;
         use Clause;
         use Literal::*;
@@ -122,6 +124,19 @@ mod tests {
                     "Input: {:?}",
                     source
                 );
+            }
+        }
+
+        #[test]
+        fn test_parse_files() {
+            // List files under "data/uf20-91"
+            let files = std::fs::read_dir(Path::new("data/uf20-91"))
+                .expect("Failed to read directory")
+                .map(|f| f.unwrap().path());
+            for file in files {
+                println!("Parsing: {:?}", file);
+                let source = std::fs::read_to_string(&file).expect("Failed to read file");
+                assert!(CNF::parse(&source).is_ok())
             }
         }
     }
