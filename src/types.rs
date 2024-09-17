@@ -20,6 +20,13 @@ impl Neg for Literal {
 }
 
 impl Literal {
+    pub fn eval(&self, b: bool) -> bool {
+        match self {
+            Literal::Pos(_) => b,
+            Literal::Neg(_) => !b,
+        }
+    }
+
     pub fn var(&self) -> Var {
         match self {
             Literal::Pos(v) => *v,

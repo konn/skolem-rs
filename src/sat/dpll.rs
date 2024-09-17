@@ -1,30 +1,36 @@
 use crate::types::*;
 use itertools::Itertools;
-use std::{collections::HashMap, ops::Add};
+use std::{collections::HashMap, ops::Mul};
 
-type PartialAssignment = HashMap<Var, Option<bool>>;
+type Level = usize;
+
+type PartialAssignment = HashMap<Var, Option<(bool, Level)>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DpllState {
     clauses: Vec<Clause>,
     assign: PartialAssignment,
-    decision_history: Vec<Var>,
+    decision_history: Vec<Literal>,
 }
 
-enum Rule {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Status {
+    Satisfied,
     Conflict,
     UnitClause(Literal),
     Decide,
 }
-use Rule::*;
+use Status::*;
 
-impl Add for Rule {
-    type Output = Rule;
-    fn add(self, other: Rule) -> Rule {
+impl Mul for Status {
+    type Output = Status;
+    fn mul(self, other: Status) -> Status {
         match (self, other) {
-            (Conflict, _) | (_, Rule::Conflict) => Rule::Conflict,
-            (Decide, r) | (r, Rule::Decide) => r,
-            (UnitClause(l), _) => Rule::UnitClause(l),
+            (Conflict, _) | (_, Conflict) => Conflict,
+            (Satisfied, Satisfied) => Satisfied,
+            (Satisfied, r) | (r, Satisfied) => r,
+            (Decide, r) | (r, Decide) => r,
+            (UnitClause(l), _) => UnitClause(l),
         }
     }
 }
@@ -47,87 +53,98 @@ impl DpllState {
         }
     }
 
-    fn is_free(&self, v: &Var) -> bool {
-        self.assign.get(v).is_none()
+    fn eval(&self, l: &Literal) -> Option<bool> {
+        self.assign
+            .get(&l.var())
+            .and_then(|b| b.map(|(v, _)| l.eval(v)))
     }
 
-    fn next_rule(&self) -> Rule {
+    fn get_status(&self) -> Status {
         self.clauses
             .iter()
             .map(|Clause(c)| {
-                let frees = c
-                    .iter()
-                    .filter(|&&v| self.is_free(&v.var()))
-                    .collect::<Vec<_>>();
-                if frees.len() <= 1 {
-                    if let Some(&&e) = frees.first() {
-                        UnitClause(e)
-                    } else {
-                        Conflict
+                let mut free = None;
+                for l in c {
+                    match self.eval(l) {
+                        Some(true) => return Satisfied,
+                        Some(false) => continue,
+                        None => {
+                            if let Some(_) = free.replace(l) {
+                                return Decide;
+                            }
+                        }
                     }
+                }
+                if let Some(l) = free {
+                    UnitClause(*l)
                 } else {
-                    Decide
+                    Conflict
                 }
             })
-            .fold(Rule::Decide, Rule::add)
+            .fold(Satisfied, Status::mul)
     }
 
     fn propagate(&mut self, l: Literal) {
-        self.clauses = self
-            .clauses
-            .iter()
-            .filter_map(|Clause(c)| {
-                // First removes the negated
-                let mut seed = c.into_iter().filter(|&&l2| l2 != -l);
-                let sat = seed.by_ref().any(|&l2| l2 == l);
-                if sat {
-                    None
-                } else {
-                    Some(Clause(seed.map(|v| *v).collect()))
+        self.assign
+            .insert(l.var(), Some((l.make_true(), self.decision_history.len())));
+    }
+
+    fn clear_decision(&mut self) {
+        let lvl = self.decision_history.len();
+        for entry in self.assign.values_mut() {
+            if let Some((_, l)) = entry {
+                if *l > lvl {
+                    *entry = None;
                 }
-            })
-            .collect();
+            }
+        }
     }
 
     fn solve(&mut self) -> Option<Assignment> {
-        loop {
-            if self.clauses.is_empty() {
-                // No clause left. Satisified!
-                return Some(
-                    self.assign
-                        .iter()
-                        .filter_map(|(v, b)| b.map(|b| (*v, b)))
-                        .collect(),
-                );
-            }
-            // Check if there is any empty or unit clause.
-            else {
-                match self.next_rule() {
-                    UnitClause(l) => {
-                        // Unit Clause Found - Make it true!
-                        self.assign.insert(l.var(), Some(l.make_true()));
-                        self.propagate(l);
-                    }
-                    Conflict => {
-                        // Empty clause reached; unsatisfiable!
-                        if let Some(v) = self.decision_history.pop() {
-                            // Decision clause; backtrack and assume -v.
-                            self.assign.insert(v, Some(false));
-                            self.propagate(Literal::Neg(v));
-                        } else {
-                            return None;
+        'main: loop {
+            match self.get_status() {
+                Satisfied => {
+                    return Some(
+                        self.assign
+                            .iter()
+                            .filter_map(|(v, b)| b.map(|b| (*v, b.0)))
+                            .collect(),
+                    );
+                }
+                UnitClause(l) => {
+                    // Unit Clause Found - Make it true!
+                    self.propagate(l);
+                }
+                Conflict => {
+                    // Empty clause reached; unsatisfiable!
+                    while let Some(l) = self.decision_history.pop() {
+                        // The first or the second decision failed.
+                        match l {
+                            Literal::Pos(v) => {
+                                // The first decision clause; backtrack and assume -v.
+                                self.clear_decision();
+                                self.decision_history.push(Literal::Neg(v));
+                                self.propagate(Literal::Neg(v));
+                                continue 'main;
+                            }
+                            Literal::Neg(_) => {
+                                // Both positive and negative failed.
+                                // clear history on the literal and continue to
+                                // upper level.
+                                self.clear_decision();
+                            }
                         }
                     }
-                    Decide => {
-                        let undec = self.assign.iter().find(|(_, b)| b.is_none()).unzip().0;
-                        match undec {
-                            None => return None,
-                            Some(&v) => {
-                                // Applies Decision Rule.
-                                self.decision_history.push(v);
-                                self.assign.insert(v, Some(true));
-                                self.propagate(Literal::Pos(v));
-                            }
+                    return None;
+                }
+                Decide => {
+                    let undec = self.assign.iter().find(|(_, b)| b.is_none()).unzip().0;
+                    match undec {
+                        None => return None,
+                        Some(&v) => {
+                            // Applies Decision Status.
+                            self.decision_history.push(Literal::Pos(v));
+                            self.propagate(Literal::Pos(v));
                         }
                     }
                 }
@@ -138,4 +155,25 @@ impl DpllState {
 
 pub fn solve(cnf: CNF) -> Option<Assignment> {
     DpllState::new(cnf).solve()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn test_solve_files() {
+        let files = std::fs::read_dir(Path::new("data/uf20-91"))
+            .expect("Failed to read directory")
+            .map(|f| f.unwrap().path())
+            .collect::<Vec<_>>();
+        // let files = vec![Path::new("data/uf20-91/uf20-0778.cnf")];
+        for targ in files {
+            println!("Target: {targ:?}");
+            let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
+            assert!(solve(cnf).is_some());
+        }
+    }
 }
