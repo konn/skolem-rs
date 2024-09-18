@@ -36,14 +36,14 @@ impl Mul for Status {
 }
 
 impl DpllState {
-    fn new(CNF(cnf): CNF) -> Self {
+    fn new(CNF(cnf): &CNF) -> Self {
         let assign = HashMap::from_iter(
             cnf.iter()
                 .flat_map(|Clause(c)| c.iter().map(|l| (l.var(), None))),
         );
         let clauses = cnf
-            .into_iter()
-            .map(|Clause(c)| Clause(c.into_iter().unique().collect()))
+            .iter()
+            .map(|Clause(c)| Clause(c.into_iter().unique().map(|v| v.clone()).collect()))
             .unique()
             .collect();
         DpllState {
@@ -153,7 +153,7 @@ impl DpllState {
     }
 }
 
-pub fn solve(cnf: CNF) -> Option<Assignment> {
+pub fn solve(cnf: &CNF) -> Option<Assignment> {
     DpllState::new(cnf).solve()
 }
 
@@ -173,7 +173,17 @@ mod tests {
         for targ in files {
             println!("Target: {targ:?}");
             let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
-            assert!(solve(cnf).is_some());
+            let answer = solve(&cnf);
+            assert!(answer.is_some());
+            if let Some(assign) = answer {
+                assert_eq!(
+                    cnf.eval(&assign),
+                    Some(true),
+                    "input: {:?}, bad assignment: {:?}",
+                    &cnf,
+                    &assign
+                );
+            }
         }
     }
 }

@@ -49,3 +49,53 @@ pub struct Clause(pub Vec<Literal>);
 pub struct CNF(pub Vec<Clause>);
 
 pub type Assignment = HashMap<Var, bool>;
+
+fn opt_or(l: Option<bool>, r: Option<bool>) -> Option<bool> {
+    match (l, r) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), r) | (r, Some(false)) => r,
+        (None, None) => None,
+    }
+}
+
+fn opt_and(l: Option<bool>, r: Option<bool>) -> Option<bool> {
+    match (l, r) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), r) | (r, Some(true)) => r,
+        (None, None) => None,
+    }
+}
+
+impl CNF {
+    pub fn eval(&self, assign: &Assignment) -> Option<bool> {
+        self.0
+            .iter()
+            .map(|Clause(c)| {
+                c.iter()
+                    .map(|l| assign.get(&l.var()).map(|&v| l.eval(v)))
+                    .fold(Some(false), opt_or)
+            })
+            .fold(Some(true), opt_and)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    mod cnf {
+        use super::*;
+        use CNF;
+
+        #[test]
+        fn eval() {
+            let cnf = CNF(vec![
+                Clause(vec![Literal::Pos(1), Literal::Pos(2)]),
+                Clause(vec![Literal::Pos(1), Literal::Neg(2)]),
+            ]);
+            let assign = [(1, true)].into_iter().collect();
+            assert_eq!(cnf.eval(&assign), Some(true));
+            let assign = [(1, false), (2, false)].into_iter().collect();
+            assert_eq!(cnf.eval(&assign), Some(false));
+        }
+    }
+}
