@@ -124,6 +124,17 @@ struct CDCLState {
     decision_step: Step,
 }
 
+fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
+    vars.into_iter()
+        .filter_map(|(v, r)| {
+            r.borrow()
+                .value
+                .as_ref()
+                .map(|VarValue { value, .. }| (v.clone(), value.clone()))
+        })
+        .collect()
+}
+
 pub fn solve(cnf: &CNF) -> Option<Assignment> {
     CDCLState::new(cnf).solve()
 }
@@ -203,7 +214,16 @@ impl CDCLState {
     }
 
     fn solve(self) -> Option<Assignment> {
-        todo!()
+        while !self.is_satisfied() {
+            todo!()
+        }
+        Some(to_assignment(self.vars))
+    }
+
+    fn is_satisfied(&self) -> bool {
+        self.clauses
+            .iter()
+            .all(|c| c.borrow().satisfied_at.is_some())
     }
 
     fn propagate(
@@ -270,6 +290,37 @@ impl CDCLState {
             NoOp
         } else {
             UnitFound(units)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn test_solve_files() {
+        let files = std::fs::read_dir(Path::new("data/uf20-91"))
+            .expect("Failed to read directory")
+            .map(|f| f.unwrap().path())
+            .collect::<Vec<_>>();
+        // let files = vec![Path::new("data/uf20-91/uf20-0778.cnf")];
+        for targ in files {
+            println!("Target: {targ:?}");
+            let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
+            let answer = solve(&cnf);
+            assert!(answer.is_some());
+            if let Some(assign) = answer {
+                assert_eq!(
+                    cnf.eval(&assign),
+                    Some(true),
+                    "input: {:?}, bad assignment: {:?}",
+                    &cnf,
+                    &assign
+                );
+            }
         }
     }
 }
