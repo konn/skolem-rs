@@ -17,6 +17,7 @@ impl Literal {
         let var: Var = source
             .collect::<String>()
             .parse()
+            .map(Var)
             .map_err(|e: ParseIntError| format!("Invalid variable: {e}"))?;
         Ok(cons(var))
     }
@@ -73,6 +74,7 @@ impl CNF {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Var;
 
     mod literal {
         use super::*;
@@ -80,7 +82,7 @@ mod tests {
 
         #[test]
         fn test_parse() {
-            let cases = [("12", Pos(12)), ("-13", Neg(13))];
+            let cases = [("12", Pos(Var(12))), ("-13", Neg(Var(13)))];
             for (source, expected) in cases.iter() {
                 assert_eq!(
                     Literal::parse(*source),
@@ -103,15 +105,15 @@ mod tests {
         #[test]
         fn test_parse() {
             let cases = [
-                ("p cnf 1 1\n1", Ok(vec![vec![Pos(1)]])),
-                ("p cnf 1 1\n1 0 124", Ok(vec![vec![Pos(1)]])),
+                ("p cnf 1 1\n1", Ok(vec![vec![Pos(Var(1))]])),
+                ("p cnf 1 1\n1 0 124", Ok(vec![vec![Pos(Var(1))]])),
                 ("p cnf 3 4\n1 0 124", Err("Expected 4 clauses, but got 2")),
                 (
                     "p cnf 3 3\n1 0 3 -2\n1 0 1",
                     Ok(vec![
-                        vec![Pos(1)],
-                        vec![Pos(3), Neg(2), Pos(1)],
-                        vec![Pos(1)],
+                        vec![Pos(Var(1))],
+                        vec![Pos(Var(3)), Neg(Var(2)), Pos(Var(1))],
+                        vec![Pos(Var(1))],
                     ]),
                 ),
             ];

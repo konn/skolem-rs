@@ -1,6 +1,7 @@
 use std::{collections::HashMap, ops::Neg};
 
-pub type Var = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Var(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Literal {
@@ -89,12 +90,12 @@ mod tests {
         #[test]
         fn eval() {
             let cnf = CNF(vec![
-                Clause(vec![Literal::Pos(1), Literal::Pos(2)]),
-                Clause(vec![Literal::Pos(1), Literal::Neg(2)]),
+                Clause(vec![Literal::Pos(Var(1)), Literal::Pos(Var(2))]),
+                Clause(vec![Literal::Pos(Var(1)), Literal::Neg(Var(2))]),
             ]);
-            let assign = [(1, true)].into_iter().collect();
+            let assign = [(Var(1), true)].into_iter().collect();
             assert_eq!(cnf.eval(&assign), Some(true));
-            let assign = [(1, false), (2, false)].into_iter().collect();
+            let assign = [(Var(1), false), (Var(2), false)].into_iter().collect();
             assert_eq!(cnf.eval(&assign), Some(false));
         }
     }
