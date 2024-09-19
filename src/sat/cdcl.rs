@@ -39,7 +39,6 @@ impl CDCLClause {
 type ClauseWeakRef = Weak<RefCell<CDCLClause>>;
 type ClauseRef = Rc<RefCell<CDCLClause>>;
 
-type VarWeakRef = Weak<RefCell<CDCLVar>>;
 type VarRef = Rc<RefCell<CDCLVar>>;
 
 #[derive(Debug)]
@@ -338,7 +337,28 @@ impl CDCLState {
                         .iter()
                         .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
                         .next()
-                        .unwrap_or_else(|| panic!("No unassigned variable; {:?}", &self.vars));
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "No unassigned variable: {:?}\nNon-true clauses: {:?}",
+                                &self
+                                    .vars
+                                    .iter()
+                                    .map(|(v, vs)| (v, vs.borrow().value.as_ref().map(|v| v.value)))
+                                    .collect::<Vec<_>>(),
+                                &self
+                                    .clauses
+                                    .iter()
+                                    .filter_map(|c| {
+                                        let val = c.borrow().eval_in(self);
+                                        if val != Some(true) {
+                                            Some((c, val))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            )
+                        });
                     println!("Making a decision with {v:?}");
                     self.decision_steps.push(Step(0));
                     left_over = Some((Literal::Pos(v.clone()), None));
@@ -492,8 +512,8 @@ impl CDCLState {
                         }
                         (Some(false), None) => {
                             let candidates = self.watcher_candidates(&c.borrow());
-                            if let Some(w2) = candidates.first() {
-                                c.borrow_mut().watching2 = Some(*w2);
+                            if let Some(w1) = candidates.first() {
+                                c.borrow_mut().watching1 = *w1;
                                 None
                             } else {
                                 Some(UnitFound(vec![(l2, c.clone())]))
@@ -504,10 +524,10 @@ impl CDCLState {
                             let mut iter = candidates.iter();
 
                             match (iter.next(), iter.next()) {
-                                (None, None) => unreachable!(),
-                                (Some(w), None) | (None, Some(w)) => {
+                                (None, None) | (None, Some(_)) => unreachable!(),
+                                (Some(w), None) => {
                                     c.borrow_mut().watching1 = *w;
-                                    Some(UnitFound(vec![(c.borrow().get(*w), c.clone())]))
+                                    Some(UnitFound(vec![(l2, c.clone())]))
                                 }
                                 (Some(w1), Some(w2)) => {
                                     c.borrow_mut().watching1 = *w1;
@@ -556,11 +576,12 @@ impl CDCLState {
                     let lit2 = c.get_watch2();
                     // Skip if already satisfied.
                     if let Some(true) = lit1.eval_in(self) {
-                        println!("Clause is already satisfied.");
+                        println!("Clause is already satisfied (L1).");
                         continue;
                     }
                     if let Some(lit2) = lit2 {
                         if let Some(true) = lit2.eval_in(self) {
+                            println!("Clause is already satisfied (L2).");
                             continue;
                         }
                     }
