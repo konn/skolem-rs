@@ -527,7 +527,7 @@ impl CDCLState {
                                 (None, None) | (None, Some(_)) => unreachable!(),
                                 (Some(w), None) => {
                                     c.borrow_mut().watching1 = *w;
-                                    Some(UnitFound(vec![(l2, c.clone())]))
+                                    Some(UnitFound(vec![(c.borrow().get(*w), c.clone())]))
                                 }
                                 (Some(w1), Some(w2)) => {
                                     c.borrow_mut().watching1 = *w1;
