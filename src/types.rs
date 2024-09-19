@@ -1,3 +1,4 @@
+use crate::utils::*;
 use std::{collections::HashMap, ops::Neg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,22 +51,6 @@ pub struct Clause(pub Vec<Literal>);
 pub struct CNF(pub Vec<Clause>);
 
 pub type Assignment = HashMap<Var, bool>;
-
-fn opt_or(l: Option<bool>, r: Option<bool>) -> Option<bool> {
-    match (l, r) {
-        (Some(true), _) | (_, Some(true)) => Some(true),
-        (Some(false), r) | (r, Some(false)) => r,
-        (None, None) => None,
-    }
-}
-
-fn opt_and(l: Option<bool>, r: Option<bool>) -> Option<bool> {
-    match (l, r) {
-        (Some(false), _) | (_, Some(false)) => Some(false),
-        (Some(true), r) | (r, Some(true)) => r,
-        (None, None) => None,
-    }
-}
 
 impl CNF {
     pub fn eval(&self, assign: &Assignment) -> Option<bool> {
