@@ -220,7 +220,7 @@ impl Evalable for CDCLClause {
         self.lits
             .iter()
             .map(|l| l.eval_in(state))
-            .fold(None, opt_or)
+            .fold(Some(false), opt_or)
     }
 }
 
@@ -276,14 +276,26 @@ impl CDCLState {
                 if dups {
                     return None;
                 }
-                let mut iter = lits.iter();
-                iter.next()?;
-                let (watching1, watching2) = { (0, iter.next().map(|_| 1)) };
+                let mut iter = lits.iter().enumerate();
+                let (watching1, &watch1) = iter.next()?;
+                let (watching2, watch2) = iter.next().map(|(a, b)| (a, b.clone())).unzip();
+
                 let clause = Rc::new(RefCell::new(CDCLClause {
                     lits,
                     watching1,
                     watching2,
                 }));
+
+                vars.get(&watch1.var())
+                    .unwrap()
+                    .borrow_mut()
+                    .add_watcher(Rc::downgrade(&clause));
+                if let Some(w2) = watch2 {
+                    vars.get(&w2.var())
+                        .unwrap()
+                        .borrow_mut()
+                        .add_watcher(Rc::downgrade(&clause));
+                }
 
                 Some(Ok(clause))
             })
@@ -304,16 +316,20 @@ impl CDCLState {
             } else {
                 self.find_next_step()
             };
+            println!("Rule: {:?}", rule);
             match rule {
                 Rule::Backjump(l, p) => {
+                    println!("Backjumping: {:?}", (&l, &p));
                     left_over = {
                         let (l, c) = self.learn(l, p);
                         Some((l, Some(c)))
                     }
                 }
                 Rule::NoProp() => {
+                    println!("No propagation occurred.");
                     // Check if all satisfied.
                     if self.is_satisfied() {
+                        println!("Good! already satisified!");
                         break;
                     }
                     // Otherwise, make a decision.
@@ -323,6 +339,7 @@ impl CDCLState {
                         .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
                         .next()
                         .unwrap_or_else(|| panic!("No unassigned variable; {:?}", &self.vars));
+                    println!("Making a decision with {v:?}");
                     self.decision_steps.push(Step(0));
                     left_over = Some((Literal::Pos(v.clone()), None));
                 }
@@ -442,6 +459,7 @@ impl CDCLState {
     }
 
     fn find_next_step(&mut self) -> Rule {
+        println!("Finding next step.");
         let result = &self
             .clauses
             .iter()
@@ -452,6 +470,7 @@ impl CDCLState {
                     None =>
                     // Unit clause from the beginning
                     {
+                        println!("Processing inherent unit clause: {c:?}");
                         match l1.eval_in(self) {
                             None => Some(UnitFound(vec![(l1, c.clone())])),
                             Some(true) => None,
@@ -511,20 +530,27 @@ impl CDCLState {
     }
 
     fn propagate(&mut self, mut units: Vec<(Literal, Option<Rc<RefCell<CDCLClause>>>)>) -> Rule {
+        println!("Propagating: {:?}", &units);
         while let Some((lit, reason)) = units.pop() {
+            println!("Propagating: {:?}", (&lit, &reason));
             let v = lit.var();
             let step = self.decision_steps.last().unwrap().clone();
             let level = self.decision_steps.len();
-            let mut var_state = (*self.vars.get(&v).unwrap()).borrow_mut();
-            var_state.value = Some(VarValue {
-                decision_level: DecisionLevel(self.decision_steps.len()),
-                decision_step: step,
-                reason: reason.as_ref().map(Rc::downgrade),
-                value: lit.make_true(),
-            });
+            let watchers = {
+                let mut var_state = self.vars.get(&v).unwrap().borrow_mut();
+                var_state.value = Some(VarValue {
+                    decision_level: DecisionLevel(self.decision_steps.len()),
+                    decision_step: step,
+                    reason: reason.as_ref().map(Rc::downgrade),
+                    value: lit.make_true(),
+                });
+                println!("Var State of {:?}: {:?}", &v, &var_state);
+                mem::take(&mut var_state.watched_by)
+            };
             *self.decision_steps.get_mut(level - 1).unwrap() += 1;
-            for watcher in mem::take(&mut var_state.watched_by) {
+            for watcher in watchers {
                 if let Some(c_ref) = watcher.upgrade() {
+                    println!("Propagating {:?} to Watcher: {:?}", &lit, &c_ref);
                     let mut c = c_ref.borrow_mut();
                     let lit1 = c.get_watch1();
                     let lit2 = c.get_watch2();
@@ -532,6 +558,7 @@ impl CDCLState {
                     if lit1.eval_in(self) == Some(true)
                         || lit2.and_then(|l2| l2.eval_in(self)).unwrap_or(true)
                     {
+                        println!("Clause is already satisfied.");
                         continue;
                     }
 
@@ -548,13 +575,18 @@ impl CDCLState {
                         // only for Lit #1.
                         (&mut c.watching1, lit2)
                     };
+                    println!("Switching: {:?}", watched);
+
                     if let Some(new_watch) = frees.pop() {
+                        println!("New watch found: {:?}", &new_watch);
                         *watched = new_watch;
                     } else if let Some(unit) = unit_cand {
                         // Unit found!
+                        println!("Propagating unit: {:?}", &unit);
                         units.push((unit, Some(c_ref.clone())));
                     } else {
                         // Conflict
+                        println!("Conflict found!");
                         return Rule::Backjump(lit, c_ref.clone());
                     }
                 }
@@ -594,7 +626,6 @@ mod tests {
             .expect("Failed to read directory")
             .map(|f| f.unwrap().path())
             .collect::<Vec<_>>();
-        // let files = vec![Path::new("data/uf20-91/uf20-0778.cnf")];
         for targ in files {
             println!("Target: {targ:?}");
             let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
