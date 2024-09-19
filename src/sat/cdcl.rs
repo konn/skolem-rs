@@ -555,11 +555,14 @@ impl CDCLState {
                     let lit1 = c.get_watch1();
                     let lit2 = c.get_watch2();
                     // Skip if already satisfied.
-                    if lit1.eval_in(self) == Some(true)
-                        || lit2.and_then(|l2| l2.eval_in(self)).unwrap_or(true)
-                    {
+                    if let Some(true) = lit1.eval_in(self) {
                         println!("Clause is already satisfied.");
                         continue;
+                    }
+                    if let Some(lit2) = lit2 {
+                        if let Some(true) = lit2.eval_in(self) {
+                            continue;
+                        }
                     }
 
                     let mut frees = self.watcher_candidates(&c);
