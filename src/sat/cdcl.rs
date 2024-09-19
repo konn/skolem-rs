@@ -202,7 +202,7 @@ trait Evalable {
 
 impl Evalable for Literal {
     fn eval_in(&self, state: &CDCLState) -> Option<bool> {
-        self.var().eval_in(state)
+        Some(self.eval(self.var().eval_in(state)?))
     }
 }
 
