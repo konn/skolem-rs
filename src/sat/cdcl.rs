@@ -226,6 +226,7 @@ impl Evalable for CDCLClause {
 use PropagationResult::*;
 impl CDCLState {
     fn new(CNF(cnf): &CNF) -> Option<CDCLState> {
+        println!("Initialising...");
         let vars = cnf
             .iter()
             .flat_map(|v| v.0.iter())
@@ -300,6 +301,7 @@ impl CDCLState {
             })
             .try_collect::<_, _, ()>()
             .ok()?;
+        println!("Initialised.");
         Some(CDCLState {
             vars,
             clauses,
@@ -308,10 +310,11 @@ impl CDCLState {
     }
 
     fn solve(&mut self) -> Option<Assignment> {
-        let mut left_over = None;
+        let mut left_over: Option<(Literal, Option<Rc<RefCell<CDCLClause>>>)> = None;
+        println!("Solving: {:?}", self.clauses);
         while !self.is_satisfied() {
-            let rule = if let Some(l) = left_over {
-                self.propagate(vec![l])
+            let rule = if let Some(l) = left_over.take() {
+                self.propagate(vec![l.clone()])
             } else {
                 self.find_next_step()
             };
@@ -336,32 +339,14 @@ impl CDCLState {
                         .vars
                         .iter()
                         .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
-                        .next()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "No unassigned variable: {:?}\nNon-true clauses: {:?}",
-                                &self
-                                    .vars
-                                    .iter()
-                                    .map(|(v, vs)| (v, vs.borrow().value.as_ref().map(|v| v.value)))
-                                    .collect::<Vec<_>>(),
-                                &self
-                                    .clauses
-                                    .iter()
-                                    .filter_map(|c| {
-                                        let val = c.borrow().eval_in(self);
-                                        if val != Some(true) {
-                                            Some((c, val))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                            )
-                        });
-                    println!("Making a decision with {v:?}");
-                    self.decision_steps.push(Step(0));
-                    left_over = Some((Literal::Pos(v.clone()), None));
+                        .next();
+                    if let Some(v) = v {
+                        println!("Making decision: {:?}", &v);
+                        self.decision_steps.push(Step(0));
+                        left_over = Some((Literal::Pos(v.clone()), None));
+                    } else {
+                        println!("No decision possible. Seems contradicting. coninue...");
+                    }
                 }
             }
         }
@@ -390,7 +375,13 @@ impl CDCLState {
             4. Otherwise, the only literal decided in level L is 1-UIP.
     */
     fn learn(&mut self, mut lit: Literal, p: ClauseRef) -> (Literal, ClauseRef) {
-        let (mut leftover, mut learnt) = self.classify(p);
+        let (mut leftover, mut learnt) = self.classify(
+            p.borrow()
+                .lits
+                .iter()
+                .filter(|l| l.var() != lit.var())
+                .cloned(),
+        );
         while leftover.len() > 1 {
             let pair = self
                 .vars
@@ -399,11 +390,13 @@ impl CDCLState {
                 .borrow()
                 .value
                 .as_ref()
-                .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()));
+                .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()))
+                .map(|p| p.borrow().lits.clone());
             match pair {
                 None => break,
                 Some(cls) => {
-                    let (lo, older) = self.classify(cls);
+                    let (lo, older) =
+                        self.classify(cls.iter().filter(|l| l.var() != lit.var()).cloned());
                     learnt.extend(older);
                     leftover.extend(lo.into_iter());
                     lit = leftover.pop().unwrap().value;
@@ -430,29 +423,24 @@ impl CDCLState {
             .unwrap()
             .borrow_mut()
             .add_watcher(Rc::downgrade(&learnt));
-        self.decision_steps.truncate(jump_level.0);
+        self.decision_steps.truncate(jump_level.0 + 1);
         (lit.clone(), learnt)
     }
 
     fn classify(
         &mut self,
-        cls: Rc<RefCell<CDCLClause>>,
+        lits: impl Iterator<Item = Literal>,
     ) -> (BinaryHeap<Pair<Step, Literal>>, HashSet<Literal>) {
         let level = self.decision_steps.len();
-        let (lo, older) = cls
-            .borrow()
-            .lits
-            .iter()
-            .map(|v| v.clone())
-            .partition::<HashSet<_>, _>(|l| {
-                self.vars
-                    .get(&l.var())
-                    .unwrap()
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .map_or(false, |v| v.decision_level == DecisionLevel(level))
-            });
+        let (lo, older) = lits.map(|v| v.clone()).partition::<HashSet<_>, _>(|l| {
+            self.vars
+                .get(&l.var())
+                .unwrap()
+                .borrow()
+                .value
+                .as_ref()
+                .map_or(false, |v| v.decision_level == DecisionLevel(level))
+        });
         let lo = lo
             .into_iter()
             .map(|l| Pair {
@@ -524,7 +512,8 @@ impl CDCLState {
                             let mut iter = candidates.iter();
 
                             match (iter.next(), iter.next()) {
-                                (None, None) | (None, Some(_)) => unreachable!(),
+                                (None, None) => Some(Conflict(l1, c.clone())),
+                                (None, Some(_)) => unreachable!(),
                                 (Some(w), None) => {
                                     c.borrow_mut().watching1 = *w;
                                     Some(UnitFound(vec![(c.borrow().get(*w), c.clone())]))
@@ -626,8 +615,8 @@ impl CDCLState {
             .filter_map(|(i, l)| {
                 let v = l.var();
                 let unassigned = self.vars.get(&v).unwrap().borrow().value.is_none();
-                let not_w1 = l.var() != c.get_watch1().var();
-                let not_w2 = c.get_watch2().map_or(true, |l2| l2.var() != l.var());
+                let not_w1 = v != c.get_watch1().var();
+                let not_w2 = c.get_watch2().map_or(false, |l2| l2.var() != v);
                 if unassigned && not_w1 && not_w2 {
                     Some(i)
                 } else {
@@ -646,13 +635,37 @@ mod tests {
 
     #[test]
     fn test_solve_files() {
+        println!("Testing...");
         let files = std::fs::read_dir(Path::new("data/uf20-91"))
             .expect("Failed to read directory")
             .map(|f| f.unwrap().path())
             .collect::<Vec<_>>();
+        /* let files = [CNF(vec![
+            vec![-1, -2, -3, -4, 5],
+            vec![-3, -4, -6],
+            vec![-5, 6, -1, 7],
+            vec![-7, 8],
+            vec![-2, -7, 9],
+            vec![-8, -9, 10],
+            vec![-10, 11],
+            vec![-11, 12],
+            vec![-10, -2, -12],
+        ]
+        .iter()
+        .map(|c| {
+            Clause(
+                c.into_iter()
+                    .cloned()
+                    .map(|i: i64| Literal::from(i))
+                    .collect(),
+            )
+        })
+        .collect())]; */
         for targ in files {
             println!("Target: {targ:?}");
             let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
+            // for cnf in files {
+            //println!("Target: {cnf:?}");
             let answer = solve(&cnf);
             assert!(answer.is_some());
             if let Some(assign) = answer {

@@ -10,6 +10,30 @@ pub enum Literal {
     Neg(Var),
 }
 
+impl From<u64> for Var {
+    fn from(v: u64) -> Self {
+        Var(v)
+    }
+}
+
+impl From<u64> for Literal {
+    fn from(v: u64) -> Self {
+        Literal::Pos(Var(v))
+    }
+}
+
+impl From<i64> for Literal {
+    fn from(v: i64) -> Self {
+        if v == 0 {
+            panic!("0 is not a valid variable");
+        } else if v < 0 {
+            Literal::Neg(Var((-v) as u64))
+        } else {
+            Literal::Pos(Var(v as u64))
+        }
+    }
+}
+
 impl Neg for Literal {
     type Output = Self;
 
