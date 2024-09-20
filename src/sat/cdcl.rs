@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     iter, mem,
     ops::{Add, AddAssign, Mul},
     rc::{Rc, Weak},
@@ -171,6 +171,7 @@ pub fn solve(cnf: &CNF) -> Option<Assignment> {
     CDCLState::new(cnf).and_then(|mut v| v.solve())
 }
 
+#[derive(Debug)]
 struct Pair<P, V> {
     priority: P,
     value: V,
@@ -316,15 +317,32 @@ impl CDCLState {
             let rule = if let Some(l) = left_over.take() {
                 self.propagate(vec![l.clone()])
             } else {
-                self.find_next_step()
+                self.find_unit()
             };
             println!("Rule: {:?}", rule);
             match rule {
                 Rule::Backjump(l, p) => {
-                    println!("Backjumping: {:?}", (&l, &p));
-                    left_over = {
-                        let (l, c) = self.learn(l, p);
-                        Some((l, Some(c)))
+                    println!("-------------------------------");
+                    println!("Contradiction!: {:?}", (&l, &p));
+                    let mut assgn = self
+                        .vars
+                        .iter()
+                        .map(|(Var(v), b)| (v, b.borrow().value.as_ref().map(|v| v.value)))
+                        .collect::<Vec<_>>();
+                    assgn.sort_by_key(|(v, _)| *v);
+                    println!("Contradicting assingments: {:?}", assgn);
+                    println!("Contradicting decisions: {:?}", &self.decision_steps);
+                    println!("Contradicting clauses: {:?}", &self.clauses);
+
+                    if self.current_decision_level() > DecisionLevel(0) {
+                        println!("In conflict state. Backjumping...");
+                        left_over = {
+                            let (l, c) = self.learn(l, p);
+                            Some((l, Some(c)))
+                        };
+                    } else {
+                        println!("No decision state. Unsatisfiable.");
+                        return None;
                     }
                 }
                 Rule::NoProp() => {
@@ -341,6 +359,7 @@ impl CDCLState {
                         .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
                         .next();
                     if let Some(v) = v {
+                        println!("---------------");
                         println!("Making decision: {:?}", &v);
                         self.decision_steps.push(Step(0));
                         left_over = Some((Literal::Pos(v.clone()), None));
@@ -382,7 +401,18 @@ impl CDCLState {
                 .filter(|l| l.var() != lit.var())
                 .cloned(),
         );
-        while leftover.len() > 1 {
+        println!("----------");
+        println!("Backjumping(init): lit = {:?}, clause = {:?}", &lit, &p);
+        println!(
+            "Backjumping(init): lit = {:?}, leftover = {:?}, learnt = {:?}",
+            &lit, &leftover, &learnt
+        );
+        while leftover.len() > 0 {
+            println!("-----");
+            println!(
+                "Backjumping(-): lit = {:?}, leftover = {:?}, learnt = {:?}",
+                &lit, &leftover, &learnt
+            );
             let pair = self
                 .vars
                 .get(&lit.var())
@@ -391,18 +421,35 @@ impl CDCLState {
                 .value
                 .as_ref()
                 .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()))
-                .map(|p| p.borrow().lits.clone());
+                .map(|p| {
+                    p.borrow()
+                        .lits
+                        .iter()
+                        .cloned()
+                        .filter(|l| l.var() != lit.var())
+                        .collect::<Vec<_>>()
+                });
+            println!("Pair: {:?}", &pair);
             match pair {
-                None => break,
+                None => {
+                    println!("Reached to decision variable!");
+                    break;
+                }
                 Some(cls) => {
                     let (lo, older) =
                         self.classify(cls.iter().filter(|l| l.var() != lit.var()).cloned());
+                    println!("New leftover = {:?}, learnt = {:?}", &lo, &older);
                     learnt.extend(older);
                     leftover.extend(lo.into_iter());
-                    lit = leftover.pop().unwrap().value;
+                    lit = leftover.pop_last().unwrap().value;
                 }
             }
         }
+        println!("-----");
+        println!(
+            "Backjumping(final): lit = {:?}, leftover = {:?}, learnt = {:?}",
+            &lit, &leftover, &learnt
+        );
         let jump_level = learnt
             .iter()
             .filter_map(|l| {
@@ -414,7 +461,7 @@ impl CDCLState {
             .unwrap_or(DecisionLevel(0));
         let watching2 = learnt.iter().next().map(|_| 1);
         let learnt = Rc::new(RefCell::new(CDCLClause {
-            lits: iter::once(lit).chain(learnt.into_iter()).collect(),
+            lits: iter::once(-lit).chain(learnt.into_iter()).collect(),
             watching1: 0,
             watching2,
         }));
@@ -424,14 +471,16 @@ impl CDCLState {
             .borrow_mut()
             .add_watcher(Rc::downgrade(&learnt));
         self.decision_steps.truncate(jump_level.0 + 1);
+        println!("Learned: {:?} with Clause {:?}", lit, &learnt);
+        self.clauses.push(learnt.clone());
         (lit.clone(), learnt)
     }
 
     fn classify(
         &mut self,
         lits: impl Iterator<Item = Literal>,
-    ) -> (BinaryHeap<Pair<Step, Literal>>, HashSet<Literal>) {
-        let level = self.decision_steps.len();
+    ) -> (BTreeSet<Pair<Step, Literal>>, HashSet<Literal>) {
+        let level = self.current_decision_level();
         let (lo, older) = lits.map(|v| v.clone()).partition::<HashSet<_>, _>(|l| {
             self.vars
                 .get(&l.var())
@@ -439,7 +488,7 @@ impl CDCLState {
                 .borrow()
                 .value
                 .as_ref()
-                .map_or(false, |v| v.decision_level == DecisionLevel(level))
+                .map_or(false, |v| v.decision_level == level)
         });
         let lo = lo
             .into_iter()
@@ -466,12 +515,13 @@ impl CDCLState {
             .all(|c| c.borrow().eval_in(self) == Some(true))
     }
 
-    fn find_next_step(&mut self) -> Rule {
+    fn find_unit(&mut self) -> Rule {
         println!("Finding next step.");
         let result = &self
             .clauses
             .iter()
             .filter_map(|c| {
+                println!("Finding step in clause {:?}", &c);
                 let l1 = c.borrow().get_watch1();
                 let l2 = c.borrow().get_watch2();
                 match l2 {
@@ -486,13 +536,18 @@ impl CDCLState {
                         }
                     }
                     Some(l2) => match (l1.eval_in(self), l2.eval_in(self)) {
-                        (Some(true), _) => None,
-                        (_, Some(true)) => None,
+                        (Some(true), _) | (_, Some(true)) => None,
                         (None, None) => None,
                         (None, Some(false)) => {
                             let candidates = self.watcher_candidates(&c.borrow());
                             if let Some(w2) = candidates.first() {
                                 c.borrow_mut().watching2 = Some(*w2);
+                                self.vars
+                                    .get(&l2.var())
+                                    .unwrap()
+                                    .borrow_mut()
+                                    .watched_by
+                                    .retain(|w| w.upgrade().map_or(false, |w| !Rc::ptr_eq(&w, c)));
                                 None
                             } else {
                                 Some(UnitFound(vec![(l1, c.clone())]))
@@ -502,6 +557,12 @@ impl CDCLState {
                             let candidates = self.watcher_candidates(&c.borrow());
                             if let Some(w1) = candidates.first() {
                                 c.borrow_mut().watching1 = *w1;
+                                self.vars
+                                    .get(&l1.var())
+                                    .unwrap()
+                                    .borrow_mut()
+                                    .watched_by
+                                    .retain(|w| w.upgrade().map_or(false, |w| Rc::ptr_eq(&w, c)));
                                 None
                             } else {
                                 Some(UnitFound(vec![(l2, c.clone())]))
@@ -516,11 +577,35 @@ impl CDCLState {
                                 (None, Some(_)) => unreachable!(),
                                 (Some(w), None) => {
                                     c.borrow_mut().watching1 = *w;
+                                    self.vars
+                                        .get(&l1.var())
+                                        .unwrap()
+                                        .borrow_mut()
+                                        .watched_by
+                                        .retain(|w| {
+                                            w.upgrade().map_or(false, |w| Rc::ptr_eq(&w, c))
+                                        });
                                     Some(UnitFound(vec![(c.borrow().get(*w), c.clone())]))
                                 }
                                 (Some(w1), Some(w2)) => {
                                     c.borrow_mut().watching1 = *w1;
+                                    self.vars
+                                        .get(&l1.var())
+                                        .unwrap()
+                                        .borrow_mut()
+                                        .watched_by
+                                        .retain(|w| {
+                                            w.upgrade().map_or(false, |w| Rc::ptr_eq(&w, c))
+                                        });
                                     c.borrow_mut().watching2 = Some(*w2);
+                                    self.vars
+                                        .get(&l2.var())
+                                        .unwrap()
+                                        .borrow_mut()
+                                        .watched_by
+                                        .retain(|w| {
+                                            w.upgrade().map_or(false, |w| Rc::ptr_eq(&w, c))
+                                        });
                                     None
                                 }
                             }
@@ -538,17 +623,20 @@ impl CDCLState {
         }
     }
 
+    fn current_decision_level(&self) -> DecisionLevel {
+        DecisionLevel(self.decision_steps.len() - 1)
+    }
+
     fn propagate(&mut self, mut units: Vec<(Literal, Option<Rc<RefCell<CDCLClause>>>)>) -> Rule {
         println!("Propagating: {:?}", &units);
         while let Some((lit, reason)) = units.pop() {
             println!("Propagating: {:?}", (&lit, &reason));
             let v = lit.var();
             let step = self.decision_steps.last().unwrap().clone();
-            let level = self.decision_steps.len();
             let watchers = {
                 let mut var_state = self.vars.get(&v).unwrap().borrow_mut();
                 var_state.value = Some(VarValue {
-                    decision_level: DecisionLevel(self.decision_steps.len()),
+                    decision_level: self.current_decision_level(),
                     decision_step: step,
                     reason: reason.as_ref().map(Rc::downgrade),
                     value: lit.make_true(),
@@ -556,7 +644,7 @@ impl CDCLState {
                 println!("Var State of {:?}: {:?}", &v, &var_state);
                 mem::take(&mut var_state.watched_by)
             };
-            *self.decision_steps.get_mut(level - 1).unwrap() += 1;
+            *self.decision_steps.last_mut().unwrap() += 1;
             for watcher in watchers {
                 if let Some(c_ref) = watcher.upgrade() {
                     println!("Propagating {:?} to Watcher: {:?}", &lit, &c_ref);
@@ -577,22 +665,29 @@ impl CDCLState {
 
                     let mut frees = self.watcher_candidates(&c);
 
-                    let (watched, unit_cand) = if lit2.map_or(false, |l2| l2.var() == v) {
-                        // watched Lit #2 become false.
-                        // By invariant (a), we can just seek for new value
-                        // only for Lit #2.
-                        (c.watching2.as_mut().unwrap(), Some(lit1))
-                    } else {
-                        // watched Lit #1 become false.
-                        // By invariant (a), we can just seek for new value
-                        // only for Lit #1.
-                        (&mut c.watching1, lit2)
-                    };
+                    let ((watched, wlit), unit_cand) =
+                        if let Some(lit2) = lit2.filter(|l2| l2.var() == v) {
+                            // watched Lit #2 become false.
+                            // By invariant (a), we can just seek for new value
+                            // only for Lit #2.
+                            ((c.watching2.as_mut().unwrap(), lit2), Some(lit1))
+                        } else {
+                            // watched Lit #1 become false.
+                            // By invariant (a), we can just seek for new value
+                            // only for Lit #1.
+                            ((&mut c.watching1, lit1), lit2)
+                        };
                     println!("Switching: {:?}", watched);
 
                     if let Some(new_watch) = frees.pop() {
                         println!("New watch found: {:?}", &new_watch);
                         *watched = new_watch;
+                        self.vars
+                            .get(&wlit.var())
+                            .unwrap()
+                            .borrow_mut()
+                            .watched_by
+                            .retain(|w| w.upgrade().map_or(false, |w| Rc::ptr_eq(&w, &c_ref)));
                     } else if let Some(unit) = unit_cand {
                         // Unit found!
                         println!("Propagating unit: {:?}", &unit);
@@ -640,27 +735,6 @@ mod tests {
             .expect("Failed to read directory")
             .map(|f| f.unwrap().path())
             .collect::<Vec<_>>();
-        /* let files = [CNF(vec![
-            vec![-1, -2, -3, -4, 5],
-            vec![-3, -4, -6],
-            vec![-5, 6, -1, 7],
-            vec![-7, 8],
-            vec![-2, -7, 9],
-            vec![-8, -9, 10],
-            vec![-10, 11],
-            vec![-11, 12],
-            vec![-10, -2, -12],
-        ]
-        .iter()
-        .map(|c| {
-            Clause(
-                c.into_iter()
-                    .cloned()
-                    .map(|i: i64| Literal::from(i))
-                    .collect(),
-            )
-        })
-        .collect())]; */
         for targ in files {
             println!("Target: {targ:?}");
             let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
