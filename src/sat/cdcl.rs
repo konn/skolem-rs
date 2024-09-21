@@ -465,23 +465,8 @@ impl CDCLState {
             4. Otherwise, the only literal decided in level L is 1-UIP.
     */
     fn learn(&mut self, mut lit: Literal, p: ClauseRef) -> (Literal, ClauseRef) {
-        let target_level = p
-            .borrow()
-            .lits
-            .iter()
-            .flat_map(|l| {
-                self.vars
-                    .get(&l.var())
-                    .unwrap()
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .map(|v| v.decision_level.clone())
-            })
-            .max()
-            .unwrap_or(DecisionLevel(0));
+        let final_level = self.current_decision_level();
         let (mut leftover, mut learnt) = self.classify(
-            &target_level,
             p.borrow()
                 .lits
                 .iter()
@@ -494,7 +479,6 @@ impl CDCLState {
             "Backjumping(init): lit = {:?}, leftover = {:?}, learnt = {:?}",
             &lit, &leftover, &learnt
         );
-
         while leftover.len() > 0 {
             println!("-----");
             println!(
@@ -525,10 +509,8 @@ impl CDCLState {
 
             println!("Pair: {:?}", &pair);
             if let Some(cls) = pair {
-                let (lo, older) = self.classify(
-                    &target_level,
-                    cls.iter().filter(|l| l.var() != lit.var()).cloned(),
-                );
+                let (lo, older) =
+                    self.classify(cls.iter().filter(|l| l.var() != lit.var()).cloned());
                 println!("Incoming leftover = {:?}, learnt = {:?}", &lo, &older);
                 learnt.extend(older);
                 leftover.extend(lo.into_iter());
@@ -536,6 +518,11 @@ impl CDCLState {
             lit = leftover.pop_last().unwrap().value;
         }
         println!("-----");
+        lit = match lit.var().eval_in(&self) {
+            Some(true) => Neg(lit.var()),
+            Some(false) => Pos(lit.var()),
+            None => unreachable!(),
+        };
         println!(
             "Backjumping(final): lit = {:?}, leftover = {:?}, learnt = {:?}",
             &lit, &leftover, &learnt
@@ -565,7 +552,7 @@ impl CDCLState {
         println!("Learned: {:?} with Clause {:?}", lit, &learnt);
         println!(
             "Clause variable levels (curent = {:?}): {:?}",
-            &target_level,
+            &final_level,
             &learnt
                 .borrow()
                 .lits
@@ -598,12 +585,9 @@ impl CDCLState {
 
     fn classify(
         &mut self,
-        level: &DecisionLevel,
         lits: impl Iterator<Item = Literal>,
-    ) -> (
-        BTreeSet<Pair<(DecisionLevel, Step), Literal>>,
-        HashSet<Literal>,
-    ) {
+    ) -> (BTreeSet<Pair<Step, Literal>>, HashSet<Literal>) {
+        let level = self.current_decision_level();
         let (lo, older) = lits.map(|v| v.clone()).partition::<HashSet<_>, _>(|l| {
             self.vars
                 .get(&l.var())
@@ -611,19 +595,22 @@ impl CDCLState {
                 .borrow()
                 .value
                 .as_ref()
-                .map_or(false, |v| v.decision_level >= *level)
+                .map_or(false, |v| v.decision_level == level)
         });
         let lo = lo
             .into_iter()
-            .map(|l| {
-                let val = self.vars.get(&l.var()).unwrap();
-                Pair {
-                    priority: (
-                        val.borrow().value.as_ref().unwrap().decision_level.clone(),
-                        val.borrow().value.as_ref().unwrap().decision_step.clone(),
-                    ),
-                    value: l,
-                }
+            .map(|l| Pair {
+                priority: self
+                    .vars
+                    .get(&l.var())
+                    .unwrap()
+                    .borrow()
+                    .value
+                    .as_ref()
+                    .unwrap()
+                    .decision_step
+                    .clone(),
+                value: l,
             })
             .collect();
         (lo, older)
@@ -705,28 +692,7 @@ impl CDCLState {
 
                                 match (iter.next(), iter.next()) {
                                     (None, None) => {
-                                        let l = [l1, l2]
-                                            .into_iter()
-                                            .max_by_key(|l| {
-                                                (
-                                                    self.vars[&l.var()]
-                                                        .borrow()
-                                                        .value
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .decision_level
-                                                        .clone(),
-                                                    self.vars[&l.var()]
-                                                        .borrow()
-                                                        .value
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .decision_step
-                                                        .clone(),
-                                                )
-                                            })
-                                            .unwrap();
-                                        return Rule::Backjump(l, c.clone());
+                                        return Rule::Backjump(l1, c.clone());
                                     }
                                     (None, Some(_)) => unreachable!(),
                                     (Some(w), None) => {
