@@ -429,7 +429,7 @@ impl CDCLState {
                             break;
                         }
                         Contradiction(l, c) => {
-                            println!("Contradiction found: {:?}", (&l, &c));
+                            println!("Contradiction found: {:?}", (&l, &c, l.eval_in(&self)));
                             if self.current_decision_level() > DecisionLevel(0) {
                                 println!("In conflict state. Backjumping...");
                                 left_over = {
