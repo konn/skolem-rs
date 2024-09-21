@@ -2,7 +2,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     iter, mem,
-    ops::{Add, AddAssign, Mul},
+    ops::{Add, AddAssign, Mul, MulAssign},
     rc::{Rc, Weak},
 };
 
@@ -49,30 +49,9 @@ type ClauseRef = Rc<RefCell<CDCLClause>>;
 type VarRef = Rc<RefCell<CDCLVar>>;
 
 #[derive(Debug)]
-enum PropagationResult {
-    Conflict(Literal, ClauseRef),
-    UnitFound(Vec<(Literal, ClauseRef)>),
-    NoOp,
-}
-
-#[derive(Debug)]
 enum Rule {
     NoProp(),
     Backjump(Literal, ClauseRef),
-}
-
-impl Mul for PropagationResult {
-    type Output = PropagationResult;
-    fn mul(self, rhs: PropagationResult) -> PropagationResult {
-        match (self, rhs) {
-            (NoOp, r) | (r, NoOp) => r,
-            (Conflict(i, x), _) | (_, Conflict(i, x)) => Conflict(i, x),
-            (UnitFound(mut lits), UnitFound(mut lits2)) => {
-                lits.append(&mut lits2);
-                UnitFound(lits)
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -255,7 +234,31 @@ enum Watcher {
 }
 use Watcher::*;
 
-use PropagationResult::*;
+#[derive(Debug, Clone)]
+enum Satisfaction {
+    Satisfied,
+    Contradiction(Literal, ClauseRef),
+    Indeterminate,
+}
+use Satisfaction::*;
+
+impl Mul for Satisfaction {
+    type Output = Satisfaction;
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Contradiction(l1, c1), _) | (_, Contradiction(l1, c1)) => Contradiction(l1, c1),
+            (Indeterminate, _) | (_, Indeterminate) => Indeterminate,
+            (Satisfied, Satisfied) => Satisfied,
+        }
+    }
+}
+
+impl MulAssign for Satisfaction {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = self.clone() * rhs;
+    }
+}
+
 impl CDCLState {
     fn new(CNF(cnf): &CNF) -> Option<CDCLState> {
         println!("Initialising...");
@@ -417,25 +420,44 @@ impl CDCLState {
                     }
                 }
                 Rule::NoProp() => {
+                    println!("---------------");
                     println!("No propagation occurred.");
-                    // Check if all satisfied.
-                    if self.is_satisfied() {
-                        println!("Good! already satisified!");
-                        break;
-                    }
-                    // Otherwise, make a decision.
-                    let v = self
-                        .vars
-                        .iter()
-                        .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
-                        .next();
-                    if let Some(v) = v {
-                        println!("---------------");
-                        println!("Making decision: {:?}", &v);
-                        self.decision_steps.push(Step(0));
-                        left_over = Some((Literal::Pos(v.clone()), None));
-                    } else {
-                        println!("No decision possible. Seems contradicting. coninue...");
+                    // Check if all satisfied or contradicting.
+                    match self.check_satisfaction() {
+                        Satisfied => {
+                            println!("Already satisfied, good!");
+                            break;
+                        }
+                        Contradiction(l, c) => {
+                            println!("Contradiction found: {:?}", (&l, &c));
+                            if self.current_decision_level() > DecisionLevel(0) {
+                                println!("In conflict state. Backjumping...");
+                                left_over = {
+                                    let (l, c) = self.learn(l, c);
+                                    Some((l, Some(c)))
+                                };
+                            } else {
+                                println!("No decision state. Unsatisfiable.");
+                                return None;
+                            }
+                        }
+                        Indeterminate => {
+                            // Otherwise, make a decision.
+                            let v = self
+                                .vars
+                                .iter()
+                                .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
+                                .next();
+                            if let Some(v) = v {
+                                println!("Making decision: {:?}", &v);
+                                self.decision_steps.push(Step(0));
+                                left_over = Some((Literal::Pos(v.clone()), None));
+                            } else {
+                                unreachable!(
+                                    "No decision possible. Seems contradicting. coninue..."
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -475,6 +497,11 @@ impl CDCLState {
         );
         println!("----------");
         println!("Backjumping(init): lit = {:?}, clause = {:?}", &lit, &p);
+        debug_assert!(p.borrow().lits.iter().any(|l| self.vars.get(&l.var()).unwrap().borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
+            "Conflicting clause {:?} must contain at least one literal decided in this decision level {:?}, but none!",
+            &p.borrow().lits.iter().map(|l| (l.clone(), self.vars.get(&l.var()).unwrap().borrow().value.as_ref().map(|v| v.decision_level.clone()))).collect::<Vec<_>>(),
+            &self.current_decision_level()
+        );
         println!(
             "Backjumping(init): lit = {:?}, leftover = {:?}, learnt = {:?}",
             &lit, &leftover, &learnt
@@ -620,6 +647,72 @@ impl CDCLState {
         self.clauses
             .iter()
             .all(|c| c.borrow().eval_in(self) == Some(true))
+    }
+
+    fn check_satisfaction(&self) -> Satisfaction {
+        let mut value = Satisfied;
+        for c in &self.clauses {
+            let l1 = c.borrow().get_watch1();
+            if let Some(l2) = c.borrow().get_watch2() {
+                match (l1.eval_in(&self), l2.eval_in(&self)) {
+                    (Some(true), _) | (_, Some(true)) => {
+                        value *= Satisfied;
+                    }
+                    _ => {
+                        let mut cls_val = Some(false);
+                        for l in &c.borrow().lits {
+                            let val = l.eval_in(&self);
+                            if let Some(true) = val {
+                                cls_val = Some(true);
+                                break;
+                            } else {
+                                cls_val = opt_or(cls_val, val);
+                            }
+                        }
+                        match cls_val {
+                            Some(true) => {
+                                value *= Satisfied;
+                            }
+                            Some(false) => {
+                                let l = c
+                                    .borrow()
+                                    .lits
+                                    .iter()
+                                    .max_by_key(|l| {
+                                        self.vars
+                                            .get(&l.var())
+                                            .unwrap()
+                                            .borrow()
+                                            .value
+                                            .as_ref()
+                                            .map(|v| (v.decision_level.0, v.decision_step.0))
+                                            .unwrap()
+                                    })
+                                    .unwrap()
+                                    .clone();
+                                return Contradiction(l, c.clone());
+                            }
+                            None => {
+                                value *= Indeterminate;
+                            }
+                        }
+                    }
+                }
+            } else {
+                match l1.eval_in(&self) {
+                    Some(true) => {
+                        value *= Satisfied;
+                    }
+                    Some(false) => {
+                        return Contradiction(l1, c.clone());
+                    }
+                    None => {
+                        value *= Indeterminate;
+                    }
+                }
+            }
+        }
+        value
     }
 
     fn find_unit(&mut self) -> Rule {
