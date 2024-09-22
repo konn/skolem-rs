@@ -111,3 +111,43 @@ mod tests {
 }
 
 pub mod priority_search_queue;
+
+#[macro_export]
+macro_rules! clause {
+    ($($lit:literal)*) => {
+        {
+            let mut vec = Vec::new();
+            $(
+                {
+                    let lit: i64 = $lit;
+                    if lit == 0 {
+                        panic!("0 is not a valid variable");
+                    } else if lit < 0 {
+                        vec.push(Literal::Neg(Var(-lit as u64)));
+                    } else {
+                        vec.push(Literal::Pos(Var(lit as u64)));
+                    }
+                }
+            )*
+            Clause(vec)
+        }
+    };
+    ($($lit:literal),*) => {
+        {
+            let mut vec = Vec::new();
+            $(
+                {
+                    let lit: i64 = $lit;
+                    if lit == 0 {
+                        panic!("0 is not a valid variable");
+                    } else if lit < 0 {
+                        vec.push(Literal::Neg(Var(-lit as u64)));
+                    } else {
+                        vec.push(Literal::Pos(Var(lit as u64)));
+                    }
+                }
+            )*
+            Clause(vec)
+        }
+    };
+}
