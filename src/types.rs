@@ -1,5 +1,8 @@
 use crate::utils::*;
-use std::{collections::HashMap, ops::Neg};
+use std::{
+    collections::HashMap,
+    ops::{Neg, Not},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Var(pub u64);
@@ -8,6 +11,17 @@ pub struct Var(pub u64);
 pub enum Literal {
     Pos(Var),
     Neg(Var),
+}
+
+impl Not for Literal {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        match self {
+            Literal::Pos(v) => Literal::Neg(v),
+            Literal::Neg(v) => Literal::Pos(v),
+        }
+    }
 }
 
 impl From<u64> for Var {
