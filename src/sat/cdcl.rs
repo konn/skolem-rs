@@ -2,6 +2,7 @@ use crate::types::*;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::hash::Hash;
+use std::mem;
 use std::{
     cell::{RefCell, RefMut},
     collections::{HashMap, HashSet, VecDeque},
@@ -195,30 +196,17 @@ impl ClauseLike for ClauseRef {
             &l,
             self.borrow()
         );
-        let mut this = self.borrow_mut();
+        let this: &mut CDCLClause = &mut self.borrow_mut();
         debug_assert!(
             this.watching1 != l && this.watching2 != Some(l),
             "New watcher must be different to the existing ones!"
         );
-        let old = match w {
-            Watcher1 => {
-                let old = this.watching1;
-                this.watching1 = l;
-                old
-            }
-            Watcher2 => {
-                let old = this.watching2.unwrap();
-                this.watching2 = Some(l);
-                old
-            }
+        let watcher = match w {
+            Watcher1 => &mut this.watching1,
+            Watcher2 => this.watching2.as_mut().unwrap(),
         };
-        debug_assert!(
-            match w {
-                Watcher1 => this.watching1 == l,
-                Watcher2 => this.watching2 == Some(l),
-            },
-            "Watcher must be set properly!"
-        );
+        let old = mem::replace(watcher, l);
+        debug_assert!(*watcher == l, "Watcher must be set properly!");
         this.get_var_mut(old).remove_watcher(self);
         this.get_var_mut(l).add_watcher(Rc::downgrade(self));
     }
