@@ -104,6 +104,13 @@ impl CDCLClause {
         self.lits[i].var.borrow_mut()
     }
 
+    fn get_watcher(&self, w: Watcher) -> usize {
+        match w {
+            Watcher1 => self.watching1,
+            Watcher2 => self.watching2.unwrap(),
+        }
+    }
+
     fn get_watch1_lit(&self) -> Literal {
         self.get(self.watching1)
     }
@@ -135,12 +142,13 @@ impl CDCLClause {
         use Watchers::*;
         let mut new_watcher = None;
         for (i, l) in self.lits.iter().enumerate() {
-            if l.lit == self.get_watch1_lit() || Some(l.lit) == self.get_watch2_lit() {
+            if i == self.watching1 || Some(i) == self.watching2 {
                 continue;
             }
             match l.eval() {
                 None => {
                     new_watcher.get_or_insert(i);
+                    break;
                 }
                 Some(true) => {
                     return Some(Satisfied(i));
@@ -148,6 +156,9 @@ impl CDCLClause {
                 Some(false) => continue,
             }
         }
+        debug_assert!(
+            new_watcher.map_or(true, |i| i != self.watching1 && Some(i) != self.watching2)
+        );
         new_watcher.map(Watchers::NextWatch)
     }
 
@@ -184,11 +195,29 @@ impl ClauseLike for ClauseRef {
             self.borrow()
         );
         let mut this = self.borrow_mut();
-        let watching = match w {
-            Watcher1 => &mut this.watching1,
-            Watcher2 => &mut this.watching2.unwrap(),
+        debug_assert!(
+            this.watching1 != l && this.watching2 != Some(l),
+            "New watcher must be different to the existing ones!"
+        );
+        let old = match w {
+            Watcher1 => {
+                let old = this.watching1.clone();
+                this.watching1 = l;
+                old
+            }
+            Watcher2 => {
+                let old = this.watching2.unwrap().clone();
+                this.watching2 = Some(l);
+                old
+            }
         };
-        let old = mem::replace(watching, l);
+        debug_assert!(
+            match w {
+                Watcher1 => this.watching1 == l,
+                Watcher2 => this.watching2 == Some(l),
+            },
+            "Watcher must be set properly!"
+        );
         this.get_var_mut(old).remove_watcher(self);
         this.get_var_mut(l).add_watcher(Rc::downgrade(self));
     }
@@ -305,7 +334,7 @@ impl ClauseLike for ClauseRef {
                                     match w2.eval() {
                                         None => {
                                             // Watched #2 is undetermined. This must be a unit!
-                                            (Watcher2, this.watching2.unwrap(), false)
+                                            return Some(Unit(w2.clone()));
                                         }
                                         Some(true) => return Some(Satisfied),
                                         Some(false) => {
@@ -336,10 +365,11 @@ impl ClauseLike for ClauseRef {
                         } else {
                             // No slot available!
                             // Check the value of Watched #1.
-                            match this.get_watch1().eval() {
+                            let w1 = this.get_watch1();
+                            match w1.eval() {
                                 None => {
                                     // Watched #1 is undetermined. This must be a unit!
-                                    (Watcher1, this.watching1, false)
+                                    return Some(Unit(w1.clone()));
                                 }
                                 Some(true) => return Some(Satisfied),
                                 Some(false) => {
@@ -353,6 +383,13 @@ impl ClauseLike for ClauseRef {
                 }
             }
         };
+        println!(
+            "Switching watcher (sat: {:?}): {:?} to {:?} (original: {:?})",
+            &satisfied,
+            &watcher,
+            &new_lit,
+            self.borrow().get_watcher(watcher)
+        );
         self.switch_watcher_to(watcher, new_lit);
         satisfied.then_some(Satisfied)
     }
