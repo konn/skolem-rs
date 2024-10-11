@@ -196,7 +196,7 @@ impl ClauseLike for ClauseRef {
             &l,
             self.borrow()
         );
-        let this: &mut CDCLClause = &mut self.borrow_mut();
+        let mut this = self.borrow_mut();
         debug_assert!(
             this.watching1 != l && this.watching2 != Some(l),
             "New watcher must be different to the existing ones!"
