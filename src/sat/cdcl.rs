@@ -715,6 +715,16 @@ impl CDCLState {
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
+        if reason
+            .borrow()
+            .lits
+            .iter()
+            .filter(|l| !Rc::ptr_eq(&l.var, &lit.var))
+            .next()
+            .is_none()
+        {
+            return BackjumpResult::Failed;
+        }
         let (lit, cls) = self.learn(lit, reason);
         BackjumpResult::Jumped(lit, cls)
     }
