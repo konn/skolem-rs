@@ -507,34 +507,6 @@ pub fn solve(cnf: &CNF) -> Option<Assignment> {
     CDCLState::new(cnf).and_then(|mut v| v.solve())
 }
 
-trait Evalable {
-    fn eval_in(&self, state: &CDCLState) -> Option<bool>;
-}
-
-impl Evalable for Literal {
-    fn eval_in(&self, state: &CDCLState) -> Option<bool> {
-        Some(self.eval(self.var().eval_in(state)?))
-    }
-}
-
-impl Evalable for Var {
-    fn eval_in(&self, state: &CDCLState) -> Option<bool> {
-        state
-            .vars
-            .get(self)
-            .and_then(|v| v.borrow().value.as_ref().map(|v| v.value))
-    }
-}
-
-impl Evalable for CDCLClause {
-    fn eval_in(&self, state: &CDCLState) -> Option<bool> {
-        self.lits
-            .iter()
-            .map(|l| l.lit.eval_in(state))
-            .fold(Some(false), opt_or)
-    }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 enum Watcher {
     Watcher1,
@@ -662,8 +634,10 @@ impl CDCLState {
             println!("------------------------------------");
             println!();
             println!("left_over: {:?}", &left_over);
+            println!("current_level: {:?}", &self.current_decision_level());
             let rule = self.propagate_units(left_over.take());
 
+            println!("current_level: {:?}", &self.current_decision_level());
             println!("Rule: {:?}", rule);
             match rule {
                 PropResult::NoProp => {
@@ -719,7 +693,16 @@ impl CDCLState {
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
-        println!("Backjump started with: {:?} with reason {:?}", lit, reason);
+        println!(
+            "Backjump started with: {:?} with reason {:?}",
+            lit,
+            reason
+                .borrow()
+                .lits
+                .iter()
+                .map(|l| l.lit)
+                .collect::<Vec<_>>()
+        );
         if reason
             .borrow()
             .lits
@@ -763,7 +746,11 @@ impl CDCLState {
                 .cloned(),
         );
         println!("----------");
-        println!("Backjumping(init): lit = {:?}, clause = {:?}", &lit, &p);
+        println!(
+            "Backjumping(init): lit = {:?}, clause = {:?}",
+            &lit.lit,
+            &p.borrow().lits.iter().map(|l| l.lit).collect::<Vec<_>>()
+        );
         debug_assert!(p.borrow().lits.iter().any(|l| l.var.borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
             "Conflicting clause {:?} must contain at least one literal decided in this decision level {:?}, but none!",
             &p.borrow().lits.iter().map(|l| (l.clone(), l.var.borrow().value.as_ref().map(|v| v.decision_level))).collect::<Vec<_>>(),
@@ -884,7 +871,7 @@ impl CDCLState {
         // This saves tremendous amount of time!
         self.initinal_clauses
             .iter()
-            .all(|c| c.borrow().eval_in(self) == Some(true))
+            .all(|c| c.borrow().eval() == Some(true))
     }
 
     fn current_decision_level(&self) -> DecisionLevel {
