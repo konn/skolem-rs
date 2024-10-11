@@ -54,6 +54,16 @@ where
     }
 }
 
+impl<K, P, A> Default for PrioritySearchQueue<K, P, A>
+where
+    K: Eq + Hash + Clone,
+    P: Ord + Copy,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, P, A> PrioritySearchQueue<K, P, A>
 where
     K: Hash + Eq,

@@ -43,7 +43,7 @@ impl DpllState {
         );
         let clauses = cnf
             .iter()
-            .map(|Clause(c)| Clause(c.into_iter().unique().map(|v| v.clone()).collect()))
+            .map(|Clause(c)| Clause(c.iter().unique().copied().collect()))
             .unique()
             .collect();
         DpllState {
@@ -69,7 +69,7 @@ impl DpllState {
                         Some(true) => return Satisfied,
                         Some(false) => continue,
                         None => {
-                            if let Some(_) = free.replace(l) {
+                            if free.replace(l).is_some() {
                                 return Decide;
                             }
                         }

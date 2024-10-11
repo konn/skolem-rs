@@ -38,12 +38,11 @@ impl From<u64> for Literal {
 
 impl From<i64> for Literal {
     fn from(v: i64) -> Self {
-        if v == 0 {
-            panic!("0 is not a valid variable");
-        } else if v < 0 {
-            Literal::Neg(Var((-v) as u64))
-        } else {
-            Literal::Pos(Var(v as u64))
+        use std::cmp::Ordering::*;
+        match v.cmp(&0) {
+            Equal => panic!("0 is not a valid variable"),
+            Less => Literal::Neg(Var((-v) as u64)),
+            Greater => Literal::Pos(Var(v as u64)),
         }
     }
 }

@@ -44,7 +44,7 @@ impl CNF {
             .map_err(|e| format!("Invalid # of vars: {e:} (input: {:?})", problem_line0))?;
         let num_clauses: u64 = problem_line
             .next()
-            .ok_or(format!("# of clauses expected, but missing!"))?
+            .ok_or("# of clauses expected, but missing!")?
             .parse()
             .map_err(|e| format!("Invalid # of clauses: {e:}"))?;
         let clauses = lines
@@ -84,12 +84,7 @@ mod tests {
         fn test_parse() {
             let cases = [("12", Pos(Var(12))), ("-13", Neg(Var(13)))];
             for (source, expected) in cases.iter() {
-                assert_eq!(
-                    Literal::parse(*source),
-                    Ok(*expected),
-                    "Input: {:?}",
-                    source
-                );
+                assert_eq!(Literal::parse(source), Ok(*expected), "Input: {:?}", source);
             }
         }
     }

@@ -1,10 +1,11 @@
 use crate::types::*;
 use itertools::Itertools;
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::{
     cell::{RefCell, RefMut},
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
-    iter, mem,
+    collections::{HashMap, HashSet, VecDeque},
+    iter,
     ops::{Add, AddAssign, Neg, Not},
     rc::{Rc, Weak},
 };
@@ -100,7 +101,7 @@ impl CDCLClause {
         self.lits[i].lit
     }
 
-    fn get_var_mut<'a>(&'a mut self, i: usize) -> RefMut<CDCLVar> {
+    fn get_var_mut(&mut self, i: usize) -> RefMut<CDCLVar> {
         self.lits[i].var.borrow_mut()
     }
 
@@ -201,12 +202,12 @@ impl ClauseLike for ClauseRef {
         );
         let old = match w {
             Watcher1 => {
-                let old = this.watching1.clone();
+                let old = this.watching1;
                 this.watching1 = l;
                 old
             }
             Watcher2 => {
-                let old = this.watching2.unwrap().clone();
+                let old = this.watching2.unwrap();
                 this.watching2 = Some(l);
                 old
             }
@@ -311,65 +312,28 @@ impl ClauseLike for ClauseRef {
             let this = self.borrow_mut();
             if this.eval().unwrap_or(false) {
                 return Some(Satisfied);
-            } else {
-                if this.get_watch1().raw_var() == lit.raw_var() {
-                    if this.get_watch1().eval() == lit.eval() {
-                        return Some(Satisfied);
-                    } else {
-                        if let Some(next) = this.watcher_candidate() {
-                            match next {
-                                Watchers::NextWatch(w1) => (Watcher1, w1, false),
-                                Watchers::Satisfied(w1) => (Watcher1, w1, true),
-                            }
-                        } else {
-                            // No vacant slot found. Check if the clause has more than two literals.
-                            match this.get_watch2() {
-                                None => {
-                                    // By clause invariant, the clause has only one literal from the start;
-                                    // since propagated literal is not satisfied,
-                                    // this is a contradiction!
-                                    return Some(Conflict(lit.clone()));
-                                }
-                                Some(w2) => {
-                                    match w2.eval() {
-                                        None => {
-                                            // Watched #2 is undetermined. This must be a unit!
-                                            return Some(Unit(w2.clone()));
-                                        }
-                                        Some(true) => return Some(Satisfied),
-                                        Some(false) => {
-                                            // Both Watched #1 and #2 are false and no slot available.
-                                            // Pick the newest variable as the contradiction.
-                                            return Some(Conflict(
-                                                this.last_definite_watched().clone(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            } else if this.get_watch1().raw_var() == lit.raw_var() {
+                if this.get_watch1().eval() == lit.eval() {
+                    return Some(Satisfied);
+                } else if let Some(next) = this.watcher_candidate() {
+                    match next {
+                        Watchers::NextWatch(w1) => (Watcher1, w1, false),
+                        Watchers::Satisfied(w1) => (Watcher1, w1, true),
                     }
                 } else {
-                    // By function invariant, propagated unit has the save variable as Watcher #2.
-                    let w2 = this.get_watch2().unwrap();
-                    if w2.lit == lit.lit {
-                        return Some(Satisfied);
-                    } else {
-                        // Watched #2 is false.
-                        // Find next available slot for W2.
-                        if let Some(next) = this.watcher_candidate() {
-                            match next {
-                                Watchers::NextWatch(w2) => (Watcher2, w2, false),
-                                Watchers::Satisfied(w2) => (Watcher2, w2, true),
-                            }
-                        } else {
-                            // No slot available!
-                            // Check the value of Watched #1.
-                            let w1 = this.get_watch1();
-                            match w1.eval() {
+                    // No vacant slot found. Check if the clause has more than two literals.
+                    match this.get_watch2() {
+                        None => {
+                            // By clause invariant, the clause has only one literal from the start;
+                            // since propagated literal is not satisfied,
+                            // this is a contradiction!
+                            return Some(Conflict(lit.clone()));
+                        }
+                        Some(w2) => {
+                            match w2.eval() {
                                 None => {
-                                    // Watched #1 is undetermined. This must be a unit!
-                                    return Some(Unit(w1.clone()));
+                                    // Watched #2 is undetermined. This must be a unit!
+                                    return Some(Unit(w2.clone()));
                                 }
                                 Some(true) => return Some(Satisfied),
                                 Some(false) => {
@@ -377,6 +341,37 @@ impl ClauseLike for ClauseRef {
                                     // Pick the newest variable as the contradiction.
                                     return Some(Conflict(this.last_definite_watched().clone()));
                                 }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // By function invariant, propagated unit has the save variable as Watcher #2.
+                let w2 = this.get_watch2().unwrap();
+                if w2.lit == lit.lit {
+                    return Some(Satisfied);
+                } else {
+                    // Watched #2 is false.
+                    // Find next available slot for W2.
+                    if let Some(next) = this.watcher_candidate() {
+                        match next {
+                            Watchers::NextWatch(w2) => (Watcher2, w2, false),
+                            Watchers::Satisfied(w2) => (Watcher2, w2, true),
+                        }
+                    } else {
+                        // No slot available!
+                        // Check the value of Watched #1.
+                        let w1 = this.get_watch1();
+                        match w1.eval() {
+                            None => {
+                                // Watched #1 is undetermined. This must be a unit!
+                                return Some(Unit(w1.clone()));
+                            }
+                            Some(true) => return Some(Satisfied),
+                            Some(false) => {
+                                // Both Watched #1 and #2 are false and no slot available.
+                                // Pick the newest variable as the contradiction.
+                                return Some(Conflict(this.last_definite_watched().clone()));
                             }
                         }
                     }
@@ -515,38 +510,13 @@ fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
             r.borrow()
                 .value
                 .as_ref()
-                .map(|VarValue { value, .. }| (v.clone(), value.clone()))
+                .map(|VarValue { value, .. }| (v, *value))
         })
         .collect()
 }
 
 pub fn solve(cnf: &CNF) -> Option<Assignment> {
     CDCLState::new(cnf).and_then(|mut v| v.solve())
-}
-
-#[derive(Debug)]
-struct Pair<P, V> {
-    priority: P,
-    value: V,
-}
-
-impl<P: PartialEq, V> PartialEq for Pair<P, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority
-    }
-}
-impl<P: Eq, V> Eq for Pair<P, V> {}
-
-impl<P: PartialOrd, V> PartialOrd for Pair<P, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.priority.partial_cmp(&other.priority)
-    }
-}
-
-impl<P: Ord, V> Ord for Pair<P, V> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority.cmp(&other.priority)
-    }
 }
 
 trait Evalable {
@@ -629,7 +599,7 @@ impl CDCLState {
                                     None
                                 } else {
                                     poss.insert(v);
-                                    Some(a.clone())
+                                    Some(*a)
                                 }
                             }
                             Neg(v) => {
@@ -638,7 +608,7 @@ impl CDCLState {
                                     None
                                 } else {
                                     negs.insert(v);
-                                    Some(a.clone())
+                                    Some(*a)
                                 }
                             }
                         })
@@ -698,11 +668,11 @@ impl CDCLState {
         let mut left_over: Option<(CDCLLit, Option<Rc<RefCell<CDCLClause>>>)> = None;
         println!("Solving: {:?}", self.initinal_clauses);
         while !self.is_satisfied() {
-            println!("");
+            println!();
             println!("------------------------------------");
             println!("--- Next ---------------------------");
             println!("------------------------------------");
-            println!("");
+            println!();
             println!("left_over: {:?}", &left_over);
             let rule = self.propagate_units(left_over.take());
 
@@ -717,14 +687,15 @@ impl CDCLState {
                     let v = self
                         .vars
                         .iter()
-                        .filter_map(|(v, c)| c.borrow().value.is_none().then(|| v))
+                        .filter(|&(_, c)| c.borrow().value.is_none())
+                        .map(|(v, _)| v)
                         .next();
                     if let Some(v) = v {
                         println!("Making decision: {:?}", &v);
                         self.decision_steps.push(Step(0));
                         let mut lit = CDCLLit {
-                            lit: Neg(v.clone()),
-                            var: self.vars.get(&v).unwrap().clone(),
+                            lit: Neg(*v),
+                            var: self.vars.get(v).unwrap().clone(),
                         };
                         self.assert_literal(&mut lit, &None);
                         left_over = Some((lit, None));
@@ -756,9 +727,7 @@ impl CDCLState {
             .borrow()
             .lits
             .iter()
-            .filter(|l| !Rc::ptr_eq(&l.var, &lit.var))
-            .next()
-            .is_none()
+            .any(|l| !Rc::ptr_eq(&l.var, &lit.var))
         {
             return BackjumpResult::Failed;
         }
@@ -800,14 +769,14 @@ impl CDCLState {
         println!("Backjumping(init): lit = {:?}, clause = {:?}", &lit, &p);
         debug_assert!(p.borrow().lits.iter().any(|l| self.vars.get(&l.raw_var()).unwrap().borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
             "Conflicting clause {:?} must contain at least one literal decided in this decision level {:?}, but none!",
-            &p.borrow().lits.iter().map(|l| (l.clone(), self.vars.get(&l.raw_var()).unwrap().borrow().value.as_ref().map(|v| v.decision_level.clone()))).collect::<Vec<_>>(),
+            &p.borrow().lits.iter().map(|l| (l.clone(), self.vars.get(&l.raw_var()).unwrap().borrow().value.as_ref().map(|v| v.decision_level))).collect::<Vec<_>>(),
             &self.current_decision_level()
         );
         println!(
             "Backjumping(init): lit = {:?}, leftover = {:?}, learnt = {:?}",
             &lit, &leftover, &learnt
         );
-        while leftover.len() > 0 {
+        while !leftover.is_empty() {
             println!("-----");
             println!(
                 "Backjumping(-): lit = {:?}, leftover = {:?}, learnt = {:?}",
@@ -827,21 +796,18 @@ impl CDCLState {
                 .value
                 .as_ref()
                 .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()))
-                .map(|p| p.borrow().lits.iter().cloned().collect::<Vec<_>>());
+                .map(|p| p.borrow().lits.to_vec());
             println!("Resolving with {:?}", &pair);
 
             println!("Pair: {:?}", &pair);
             if let Some(cls) = pair {
-                let (lo, older) = self.classify(
-                    cls.iter()
-                        .filter_map(|l| (l.raw_var() != lit.raw_var()).then_some(l))
-                        .cloned(),
-                );
+                let (lo, older) =
+                    self.classify(cls.iter().filter(|l| l.raw_var() != lit.raw_var()).cloned());
                 println!("Incoming leftover = {:?}, learnt = {:?}", &lo, &older);
                 learnt.extend(older);
                 leftover.extend(lo.into_iter());
             }
-            lit = leftover.pop_last().unwrap().value;
+            lit = leftover.pop_last().unwrap().1;
         }
         println!("-----");
         lit = !lit;
@@ -851,18 +817,12 @@ impl CDCLState {
         );
         let jump_level = learnt
             .iter()
-            .filter_map(|l| {
-                l.var
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .map(|v| v.decision_level.clone())
-            })
+            .filter_map(|l| l.var.borrow().value.as_ref().map(|v| v.decision_level))
             .max()
             .unwrap_or(DecisionLevel(0));
         let watching2 = learnt.iter().next().map(|_| 1);
         let learnt = Rc::new(RefCell::new(CDCLClause {
-            lits: iter::once(lit.clone()).chain(learnt.into_iter()).collect(),
+            lits: iter::once(lit.clone()).chain(learnt).collect(),
             watching1: 0,
             watching2,
         }));
@@ -877,12 +837,7 @@ impl CDCLState {
                 .borrow()
                 .lits
                 .iter()
-                .map(|l| l
-                    .var
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .map(|v| v.decision_level.clone()))
+                .map(|l| l.var.borrow().value.as_ref().map(|v| v.decision_level))
                 .collect::<Vec<_>>()
         );
         self.learnts.push(learnt.clone());
@@ -904,9 +859,9 @@ impl CDCLState {
     fn classify(
         &mut self,
         lits: impl Iterator<Item = CDCLLit>,
-    ) -> (BTreeSet<Pair<Step, CDCLLit>>, HashSet<CDCLLit>) {
+    ) -> (BTreeMap<Step, CDCLLit>, HashSet<CDCLLit>) {
         let level = self.current_decision_level();
-        let (lo, older) = lits.map(|v| v.clone()).partition::<HashSet<_>, _>(|l| {
+        let (lo, older) = lits.partition::<HashSet<_>, _>(|l| {
             self.vars
                 .get(&l.lit.var())
                 .unwrap()
@@ -917,18 +872,18 @@ impl CDCLState {
         });
         let lo = lo
             .into_iter()
-            .map(|l| Pair {
-                priority: self
-                    .vars
-                    .get(&l.lit.var())
-                    .unwrap()
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .unwrap()
-                    .decision_step
-                    .clone(),
-                value: l,
+            .map(|l| {
+                (
+                    self.vars
+                        .get(&l.lit.var())
+                        .unwrap()
+                        .borrow()
+                        .value
+                        .as_ref()
+                        .unwrap()
+                        .decision_step,
+                    l,
+                )
             })
             .collect();
         (lo, older)
@@ -964,7 +919,7 @@ impl CDCLState {
                 // TODO: update VSIDS state Here
                 let decision_step = *self.decision_steps.last().unwrap();
                 let decision_level = self.current_decision_level();
-                let reason = c.as_ref().map(|c| Rc::downgrade(&c));
+                let reason = c.as_ref().map(Rc::downgrade);
                 let value = l.lit.make_true();
                 let v = VarValue {
                     decision_level,
@@ -974,15 +929,15 @@ impl CDCLState {
                 };
                 *self.decision_steps.last_mut().unwrap() += 1;
                 l.var.borrow_mut().value.replace(v);
-                return Asserted;
+                Asserted
             }
             Some(true) => {
                 println!("Already satisfied: {:?}", &l);
-                return Asserted;
+                Asserted
             }
             Some(false) => {
                 println!("Assertion failed; contradiction!: {:?}", &l);
-                return Contradicting;
+                Contradicting
             }
         }
     }
