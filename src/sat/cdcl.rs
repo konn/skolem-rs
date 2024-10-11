@@ -2,10 +2,10 @@ use crate::types::*;
 use itertools::Itertools;
 use std::hash::Hash;
 use std::{
-    cell::{Ref, RefCell, RefMut},
+    cell::{RefCell, RefMut},
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     iter, mem,
-    ops::{Add, AddAssign, Mul, MulAssign, Neg, Not},
+    ops::{Add, AddAssign, Neg, Not},
     rc::{Rc, Weak},
 };
 
@@ -69,14 +69,6 @@ impl CDCLLit {
             .map(|v| self.lit.eval(v.value))
     }
 
-    pub fn var(&self) -> Ref<CDCLVar> {
-        self.var.borrow()
-    }
-
-    pub fn var_mut(&mut self) -> RefMut<CDCLVar> {
-        self.var.borrow_mut()
-    }
-
     pub fn raw_var(&self) -> Var {
         self.lit.var()
     }
@@ -108,19 +100,8 @@ impl CDCLClause {
         self.lits[i].lit
     }
 
-    fn get_var(&self, i: usize) -> Ref<CDCLVar> {
-        self.lits[i].var.borrow()
-    }
-
     fn get_var_mut<'a>(&'a mut self, i: usize) -> RefMut<CDCLVar> {
         self.lits[i].var.borrow_mut()
-    }
-
-    fn get_watcher(&self, w: &Watcher) -> Option<Literal> {
-        match w {
-            Watcher1 => Some(self.get_watch1_lit()),
-            Watcher2 => self.get_watch2_lit(),
-        }
     }
 
     fn get_watch1_lit(&self) -> Literal {
@@ -131,20 +112,12 @@ impl CDCLClause {
         self.lits.get(self.watching1).unwrap()
     }
 
-    fn get_watch1_mut(&mut self) -> &mut CDCLLit {
-        self.lits.get_mut(self.watching1).unwrap()
-    }
-
     fn get_watch2_lit(&self) -> Option<Literal> {
         self.watching2.map(|i| self.get(i))
     }
 
     fn get_watch2(&self) -> Option<&CDCLLit> {
         self.watching2.map(|i| self.lits.get(i).unwrap())
-    }
-
-    fn get_watch2_mut(&mut self) -> Option<&mut CDCLLit> {
-        self.watching2.map(|i| self.lits.get_mut(i).unwrap())
     }
 
     fn eval(&self) -> Option<bool> {
@@ -160,14 +133,14 @@ impl CDCLClause {
 
     fn watcher_candidate(&self) -> Option<Watchers> {
         use Watchers::*;
-        let mut empty = None;
+        let mut new_watcher = None;
         for (i, l) in self.lits.iter().enumerate() {
             if l.lit == self.get_watch1_lit() || Some(l.lit) == self.get_watch2_lit() {
                 continue;
             }
             match l.eval() {
                 None => {
-                    empty.get_or_insert(i);
+                    new_watcher.get_or_insert(i);
                 }
                 Some(true) => {
                     return Some(Satisfied(i));
@@ -175,7 +148,7 @@ impl CDCLClause {
                 Some(false) => continue,
             }
         }
-        empty.map(Watchers::Satisfied)
+        new_watcher.map(Watchers::NextWatch)
     }
 
     fn last_definite_watched(&self) -> &CDCLLit {
@@ -204,13 +177,19 @@ trait ClauseLike {
 
 impl ClauseLike for ClauseRef {
     fn switch_watcher_to(&mut self, w: Watcher, l: usize) {
+        println!(
+            "Switching watcher: {:?} to {:?} ({:?})",
+            &w,
+            &l,
+            self.borrow()
+        );
         let mut this = self.borrow_mut();
         let watching = match w {
             Watcher1 => &mut this.watching1,
             Watcher2 => &mut this.watching2.unwrap(),
         };
         let old = mem::replace(watching, l);
-        this.get_var_mut(old).remove_watcher(Rc::downgrade(self));
+        this.get_var_mut(old).remove_watcher(self);
         this.get_var_mut(l).add_watcher(Rc::downgrade(self));
     }
 
@@ -284,6 +263,7 @@ impl ClauseLike for ClauseRef {
 
     // Invariant: lit must be watched literal of self.
     fn propagate(&mut self, lit: &mut CDCLLit) -> Option<ClauseLitState> {
+        println!("Propagating: {:?} in {:?}", &lit.lit, self);
         use ClauseLitState::*;
         {
             let v1 = self.borrow().get_watch1_lit().var();
@@ -291,18 +271,19 @@ impl ClauseLike for ClauseRef {
             let v = lit.raw_var();
             debug_assert!(
                 v1 == v || v2 == Some(v),
-                "Propagated literal must be a watched literal: {:?}, watched: {:?}, {:?}",
-                lit,
+                "Propagated literal must be a watched literal: {:?}, watched: {:?}, {:?} ({:?})",
+                lit.lit,
                 v1,
-                v2
+                v2,
+                self.borrow()
             );
         }
         let (watcher, new_lit, satisfied) = {
-            let mut this = self.borrow_mut();
+            let this = self.borrow_mut();
             if this.eval().unwrap_or(false) {
                 return Some(Satisfied);
             } else {
-                if this.get_watch1_lit().var() == lit.lit.var() {
+                if this.get_watch1().raw_var() == lit.raw_var() {
                     if this.get_watch1().eval() == lit.eval() {
                         return Some(Satisfied);
                     } else {
@@ -313,7 +294,7 @@ impl ClauseLike for ClauseRef {
                             }
                         } else {
                             // No vacant slot found. Check if the clause has more than two literals.
-                            match this.get_watch2_mut() {
+                            match this.get_watch2() {
                                 None => {
                                     // By clause invariant, the clause has only one literal from the start;
                                     // since propagated literal is not satisfied,
@@ -341,7 +322,7 @@ impl ClauseLike for ClauseRef {
                     }
                 } else {
                     // By function invariant, propagated unit has the save variable as Watcher #2.
-                    let w2 = this.get_watch2_mut().unwrap();
+                    let w2 = this.get_watch2().unwrap();
                     if w2.lit == lit.lit {
                         return Some(Satisfied);
                     } else {
@@ -466,12 +447,21 @@ struct CDCLVar {
 
 impl CDCLVar {
     fn add_watcher(&mut self, clause: ClauseWeakRef) {
+        println!("Adding watcher: {:?} to {:?}", &clause.upgrade(), self);
         self.watched_by.push(clause);
     }
 
     // Removes watching clause from the list, along with staled clauses.
-    fn remove_watcher(&mut self, clause: ClauseWeakRef) {
-        self.watched_by.retain(|w| !Weak::ptr_eq(&w, &clause));
+    fn remove_watcher(&mut self, clause: &ClauseRef) {
+        println!("Removing watcher: {:?} from {:?}", &clause, self);
+        self.watched_by.retain(|w| {
+            w.upgrade().is_some_and(|c| {
+                if Rc::ptr_eq(&c, clause) {
+                    println!("Removing!: {:?}", &c);
+                }
+                !Rc::ptr_eq(&c, clause)
+            })
+        });
     }
 }
 
@@ -550,23 +540,6 @@ impl Evalable for CDCLClause {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum WatcherCandidate {
-    EmptySlots(Vec<usize>),
-    Satisfied(usize),
-}
-
-impl Add for WatcherCandidate {
-    type Output = Self;
-    fn add(self: Self, rhs: Self) -> Self {
-        use WatcherCandidate::*;
-        match (self, rhs) {
-            (EmptySlots(ls), EmptySlots(rs)) => EmptySlots(ls.into_iter().chain(rs).collect()),
-            (Satisfied(i), _) | (_, Satisfied(i)) => Satisfied(i),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 enum Watcher {
     Watcher1,
@@ -575,34 +548,9 @@ enum Watcher {
 use Watcher::*;
 
 #[derive(Debug, Clone)]
-enum Satisfaction {
-    Satisfied,
-    Contradiction(CDCLLit, ClauseRef),
-    Indeterminate,
-}
-use Satisfaction::*;
-
-#[derive(Debug, Clone)]
 enum BackjumpResult {
     Jumped(CDCLLit, ClauseRef),
     Failed,
-}
-
-impl Mul for Satisfaction {
-    type Output = Satisfaction;
-    fn mul(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Contradiction(l1, c1), _) | (_, Contradiction(l1, c1)) => Contradiction(l1, c1),
-            (Indeterminate, _) | (_, Indeterminate) => Indeterminate,
-            (Satisfied, Satisfied) => Satisfied,
-        }
-    }
-}
-
-impl MulAssign for Satisfaction {
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = self.clone() * rhs;
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
@@ -630,7 +578,7 @@ impl CDCLState {
             })
             .collect::<HashMap<_, _>>();
         let mut dups = false;
-        let clauses = cnf
+        let clauses: Vec<_> = cnf
             .iter()
             .filter_map(|Clause(c)| {
                 let lits = {
@@ -687,6 +635,20 @@ impl CDCLState {
             .try_collect::<_, _, ()>()
             .ok()?;
         println!("Initialised.");
+        debug_assert!(
+            clauses.iter().all(|c_ref| {
+                iter::once(c_ref.borrow().get_watch1())
+                    .chain(c_ref.borrow().get_watch2())
+                    .all(|w| {
+                        w.var
+                            .borrow()
+                            .watched_by
+                            .iter()
+                            .any(|d| d.upgrade().is_some_and(|d| Rc::ptr_eq(&d, c_ref)))
+                    })
+            }),
+            "Invalid watching states!"
+        );
         Some(CDCLState {
             vars,
             initinal_clauses: clauses,
@@ -935,78 +897,8 @@ impl CDCLState {
             .all(|c| c.borrow().eval_in(self) == Some(true))
     }
 
-    fn check_satisfaction(&self) -> Satisfaction {
-        let mut value = Satisfied;
-        for c_ref in &self.initinal_clauses {
-            let c = c_ref.borrow();
-            let l1 = c.get_watch1();
-            if let Some(l2) = c.get_watch2() {
-                match (l1.eval(), l2.eval()) {
-                    (Some(true), _) | (_, Some(true)) => {
-                        value *= Satisfied;
-                    }
-                    _ => {
-                        let mut cls_val = Some(false);
-                        for l in &c.lits {
-                            let val = l.eval();
-                            if let Some(true) = val {
-                                cls_val = Some(true);
-                                break;
-                            } else {
-                                cls_val = opt_or(cls_val, val);
-                            }
-                        }
-                        match cls_val {
-                            Some(true) => {
-                                value *= Satisfied;
-                            }
-                            Some(false) => {
-                                let l = c
-                                    .lits
-                                    .iter()
-                                    .max_by_key(|l| {
-                                        l.var
-                                            .borrow()
-                                            .value
-                                            .as_ref()
-                                            .map(|v| (v.decision_level.0, v.decision_step.0))
-                                            .unwrap()
-                                    })
-                                    .unwrap();
-                                return Contradiction(l.clone(), c_ref.clone());
-                            }
-                            None => {
-                                value *= Indeterminate;
-                            }
-                        }
-                    }
-                }
-            } else {
-                match l1.eval() {
-                    Some(true) => {
-                        value *= Satisfied;
-                    }
-                    Some(false) => {
-                        return Contradiction(l1.clone(), c_ref.clone());
-                    }
-                    None => {
-                        value *= Indeterminate;
-                    }
-                }
-            }
-        }
-        value
-    }
-
     fn current_decision_level(&self) -> DecisionLevel {
         DecisionLevel(self.decision_steps.len() - 1)
-    }
-
-    fn get_all_clauses(&self) -> impl Iterator<Item = Ref<CDCLClause>> {
-        self.initinal_clauses
-            .iter()
-            .chain(self.learnts.iter())
-            .map(|c| c.borrow())
     }
 
     fn get_all_clauses_mut(&mut self) -> impl Iterator<Item = ClauseRef> + '_ {
