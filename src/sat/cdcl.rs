@@ -694,15 +694,23 @@ impl CDCLState {
                 }
                 PropResult::Backjump(l, p) => {
                     use BackjumpResult::*;
+                    println!("---------------");
+                    println!("Backjumping with: {:?} with {:?}", &l, &p,);
                     if self.current_decision_level() == DecisionLevel(0) {
+                        // Conflict at the root level. Unsatisfiable!
+                        println!("!!Unsatisfiable as already at the root level!!");
                         return None;
                     }
                     // Conflict found. Learn the clause.
                     match self.backjump(l, p) {
                         Jumped(l, r) => {
+                            println!("Jumped to: {:?} with {:?}", &l, &r);
                             left_over = Some((l, Some(r)));
                         }
-                        Failed => return None,
+                        Failed => {
+                            println!("Backjump failed!");
+                            return None;
+                        }
                     }
                 }
             }
@@ -711,11 +719,12 @@ impl CDCLState {
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
+        println!("Backjump started with: {:?} with reason {:?}", lit, reason);
         if reason
             .borrow()
             .lits
             .iter()
-            .any(|l| !Rc::ptr_eq(&l.var, &lit.var))
+            .all(|l| Rc::ptr_eq(&l.var, &lit.var))
         {
             return BackjumpResult::Failed;
         }
@@ -755,9 +764,9 @@ impl CDCLState {
         );
         println!("----------");
         println!("Backjumping(init): lit = {:?}, clause = {:?}", &lit, &p);
-        debug_assert!(p.borrow().lits.iter().any(|l| self.vars.get(&l.raw_var()).unwrap().borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
+        debug_assert!(p.borrow().lits.iter().any(|l| l.var.borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
             "Conflicting clause {:?} must contain at least one literal decided in this decision level {:?}, but none!",
-            &p.borrow().lits.iter().map(|l| (l.clone(), self.vars.get(&l.raw_var()).unwrap().borrow().value.as_ref().map(|v| v.decision_level))).collect::<Vec<_>>(),
+            &p.borrow().lits.iter().map(|l| (l.clone(), l.var.borrow().value.as_ref().map(|v| v.decision_level))).collect::<Vec<_>>(),
             &self.current_decision_level()
         );
         println!(
@@ -850,9 +859,7 @@ impl CDCLState {
     ) -> (BTreeMap<Step, CDCLLit>, HashSet<CDCLLit>) {
         let level = self.current_decision_level();
         let (lo, older) = lits.partition::<HashSet<_>, _>(|l| {
-            self.vars
-                .get(&l.lit.var())
-                .unwrap()
+            l.var
                 .borrow()
                 .value
                 .as_ref()
@@ -862,15 +869,8 @@ impl CDCLState {
             .into_iter()
             .map(|l| {
                 (
-                    self.vars
-                        .get(&l.lit.var())
-                        .unwrap()
-                        .borrow()
-                        .value
-                        .as_ref()
-                        .unwrap()
-                        .decision_step,
-                    l,
+                    l.var.borrow().value.as_ref().unwrap().decision_step,
+                    l.clone(),
                 )
             })
             .collect();
