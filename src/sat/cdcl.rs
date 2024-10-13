@@ -551,14 +551,14 @@ impl SnapshotState {
     fn backjumping(
         lit: &CDCLLit,
         leftover: &BTreeMap<Step, CDCLLit>,
-        learnt: &HashSet<CDCLLit>,
+        learnt: &HashMap<Literal, CDCLLit>,
     ) -> Self {
         SnapshotState::Backjumping {
             conflicting: lit.lit,
             resolution: leftover
                 .values()
                 .map(|l| l.lit)
-                .chain(learnt.iter().map(|l| l.lit))
+                .chain(learnt.keys().cloned())
                 .collect(),
         }
     }
@@ -938,13 +938,15 @@ impl CDCLState {
             &lit, &leftover, &learnt
         );
         let jump_level = learnt
-            .iter()
+            .values()
             .filter_map(|l| l.var.borrow().value.as_ref().map(|v| v.decision_level))
             .max()
             .unwrap_or(DecisionLevel(0));
         let watching2 = learnt.iter().next().map(|_| 1);
         let learnt = Rc::new(RefCell::new(CDCLClause {
-            lits: iter::once(lit.clone()).chain(learnt).collect(),
+            lits: iter::once(lit.clone())
+                .chain(learnt.into_values())
+                .collect(),
             watching1: 0,
             watching2,
         }));
@@ -981,9 +983,9 @@ impl CDCLState {
     fn classify(
         &mut self,
         lits: impl Iterator<Item = CDCLLit>,
-    ) -> (BTreeMap<Step, CDCLLit>, HashSet<CDCLLit>) {
+    ) -> (BTreeMap<Step, CDCLLit>, HashMap<Literal, CDCLLit>) {
         let level = self.current_decision_level();
-        let (lo, older) = lits.partition::<HashSet<_>, _>(|l| {
+        let (lo, older) = lits.partition::<Vec<_>, _>(|l| {
             l.var
                 .borrow()
                 .value
@@ -999,6 +1001,7 @@ impl CDCLState {
                 )
             })
             .collect();
+        let older = older.into_iter().map(|l| (l.lit, l.clone())).collect();
         (lo, older)
     }
 
