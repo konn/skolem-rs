@@ -102,6 +102,21 @@ impl CDCLClause {
         self.lits[i].lit
     }
 
+    fn snapshot(&self) -> ClauseSnapshot {
+        ClauseSnapshot {
+            lits: self
+                .lits
+                .iter()
+                .enumerate()
+                .map(|(i, l)| ClauseSnapshotLit {
+                    lit: l.lit,
+                    state: l.eval(),
+                    watched: i == self.watching1 || Some(i) == self.watching2,
+                })
+                .collect(),
+        }
+    }
+
     fn get_var_mut(&mut self, i: usize) -> RefMut<CDCLVar> {
         self.lits[i].var.borrow_mut()
     }
@@ -490,6 +505,72 @@ struct CDCLState {
     initinal_clauses: Vec<ClauseRef>,
     learnts: Vec<ClauseRef>,
     decision_steps: Vec<Step>,
+    history: Vec<Snapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClauseSnapshotLit {
+    lit: Literal,
+    state: Option<bool>,
+    watched: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClauseSnapshot {
+    lits: Vec<ClauseSnapshotLit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SnapshotState {
+    Propagating {
+        propagating: (Literal, Option<ClauseSnapshot>),
+        units_detected: Vec<(Literal, Option<ClauseSnapshot>)>,
+    },
+    Backjumping {
+        conflicting: Literal,
+        resolution: Vec<Literal>,
+    },
+    Idle,
+}
+
+impl SnapshotState {
+    fn propagating(
+        l: &CDCLLit,
+        reason: &Option<ClauseRef>,
+        units: &VecDeque<(CDCLLit, Option<ClauseRef>)>,
+    ) -> Self {
+        SnapshotState::Propagating {
+            propagating: (l.lit, reason.clone().map(|l| l.borrow().snapshot())),
+            units_detected: units
+                .iter()
+                .map(|(l, r)| (l.lit, r.as_ref().map(|c| c.borrow().snapshot())))
+                .collect(),
+        }
+    }
+
+    fn backjumping(
+        lit: &CDCLLit,
+        leftover: &BTreeMap<Step, CDCLLit>,
+        learnt: &HashSet<CDCLLit>,
+    ) -> Self {
+        SnapshotState::Backjumping {
+            conflicting: lit.lit,
+            resolution: leftover
+                .values()
+                .map(|l| l.lit)
+                .chain(learnt.iter().map(|l| l.lit))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Snapshot {
+    decision_level: DecisionLevel,
+    decision_step: Step,
+    decisions: Vec<Vec<Literal>>,
+    clauses: Vec<ClauseSnapshot>,
+    state: SnapshotState,
 }
 
 fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
@@ -617,12 +698,53 @@ impl CDCLState {
             }),
             "Invalid watching states!"
         );
-        Some(CDCLState {
+        let ini0 = CDCLState {
             vars,
             initinal_clauses: clauses,
             learnts: Vec::new(),
             decision_steps: vec![Step(0)],
+            history: vec![],
+        };
+        let snapshot = ini0.snapshot(SnapshotState::Idle);
+        Some(CDCLState {
+            history: vec![snapshot],
+            ..ini0
         })
+    }
+
+    fn save_snapshot(&mut self, state: SnapshotState) {
+        let snapshot = self.snapshot(state);
+        self.history.push(snapshot);
+    }
+
+    fn snapshot(&self, state: SnapshotState) -> Snapshot {
+        let decision_level = self.current_decision_level();
+        let decision_step = *self.decision_steps.last().unwrap();
+        let mut decisions = iter::repeat_with(BTreeMap::<Step, Literal>::new)
+            .take(decision_level.0 + 1)
+            .collect::<Vec<_>>();
+        for (v, r) in &self.vars {
+            let r = r.borrow();
+            if let Some(val) = &r.value {
+                let l = if val.value { Pos(*v) } else { Neg(*v) };
+                decisions[val.decision_level.0].insert(val.decision_step, l);
+            }
+        }
+        let decisions = decisions
+            .into_iter()
+            .map(|vs| vs.into_values().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let clauses = self
+            .get_all_clauses()
+            .map(|b| b.borrow().snapshot())
+            .collect();
+        Snapshot {
+            decision_level,
+            decision_step,
+            decisions,
+            clauses,
+            state,
+        }
     }
 
     fn solve(mut self) -> Option<Assignment> {
@@ -701,6 +823,7 @@ impl CDCLState {
         println!("-- END: SATISFIED ---");
         println!("---------------------");
         println!();
+        self.save_snapshot(SnapshotState::Idle);
         Some(to_assignment(self.vars))
     }
 
@@ -758,6 +881,7 @@ impl CDCLState {
                 .filter(|l| l.raw_var() != lit.raw_var())
                 .cloned(),
         );
+        self.save_snapshot(SnapshotState::backjumping(&lit, &leftover, &learnt));
         println!("----------");
         println!(
             "Backjumping(init): lit = {:?}, clause = {:?}",
@@ -805,6 +929,7 @@ impl CDCLState {
                 leftover.extend(lo.into_iter());
             }
             lit = leftover.pop_last().unwrap().1;
+            self.save_snapshot(SnapshotState::backjumping(&lit, &leftover, &learnt));
         }
         println!("-----");
         lit = !lit;
@@ -891,6 +1016,10 @@ impl CDCLState {
         DecisionLevel(self.decision_steps.len() - 1)
     }
 
+    fn get_all_clauses(&self) -> impl Iterator<Item = &ClauseRef> + '_ {
+        self.initinal_clauses.iter().chain(self.learnts.iter())
+    }
+
     fn get_all_clauses_mut(&mut self) -> impl Iterator<Item = ClauseRef> + '_ {
         self.initinal_clauses
             .iter()
@@ -917,6 +1046,7 @@ impl CDCLState {
                 };
                 *self.decision_steps.last_mut().unwrap() += 1;
                 l.var.borrow_mut().value.replace(v);
+                self.save_snapshot(SnapshotState::Idle);
                 Asserted
             }
             Some(true) => {
@@ -938,6 +1068,8 @@ impl CDCLState {
         loop {
             println!("-----");
             if let Some((mut l, reason)) = units.pop_front() {
+                let state = SnapshotState::propagating(&l, &reason, &units);
+                self.save_snapshot(state);
                 use AssertLitResult::*;
                 println!("Propagating: {:?}, {:?}", &l, &reason);
                 let resl = self.assert_literal(&mut l, &reason);
@@ -977,22 +1109,35 @@ impl CDCLState {
                             // TODO: prune dangling references.
                             if let Some(mut c) = c.upgrade() {
                                 println!("\tPropagating {:?} to {:?}", &l, &c);
-                                match c.propagate(&mut l) {
+                                let result = c.propagate(&mut l);
+                                match result {
                                     None => {
                                         println!("\t\tNothing happend");
+                                        self.save_snapshot(SnapshotState::propagating(
+                                            &l, &reason, &units,
+                                        ));
                                         continue;
                                     }
                                     Some(Satisfied) => {
                                         println!("\t\tSatisfied!");
+                                        self.save_snapshot(SnapshotState::propagating(
+                                            &l, &reason, &units,
+                                        ));
                                         continue;
                                     }
                                     Some(Conflict(conf_lit)) => {
                                         println!("\t\tConflict found: {:?}", &conf_lit);
+                                        self.save_snapshot(SnapshotState::propagating(
+                                            &l, &reason, &units,
+                                        ));
                                         return Conflicting(conf_lit, c);
                                     }
-                                    Some(Unit(l)) => {
+                                    Some(Unit(l2)) => {
                                         println!("\t\tUnit found: {:?} ({:?})", &l, &c);
-                                        units.push_back((l, Some(c)));
+                                        units.push_back((l2, Some(c)));
+                                        self.save_snapshot(SnapshotState::propagating(
+                                            &l, &reason, &units,
+                                        ));
                                     }
                                 }
                             }
