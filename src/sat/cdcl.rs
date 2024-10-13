@@ -504,7 +504,7 @@ fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
 }
 
 pub fn solve(cnf: &CNF) -> Option<Assignment> {
-    CDCLState::new(cnf).and_then(|mut v| v.solve())
+    CDCLState::new(cnf).and_then(|v| v.solve())
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
@@ -624,7 +624,7 @@ impl CDCLState {
         })
     }
 
-    fn solve(&mut self) -> Option<Assignment> {
+    fn solve(mut self) -> Option<Assignment> {
         let mut left_over: Option<(CDCLLit, Option<Rc<RefCell<CDCLClause>>>)> = None;
         println!("Solving: {:?}", self.initinal_clauses);
         while !self.is_satisfied() {
@@ -689,7 +689,7 @@ impl CDCLState {
                 }
             }
         }
-        Some(to_assignment(self.vars.clone()))
+        Some(to_assignment(self.vars))
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
@@ -922,7 +922,7 @@ impl CDCLState {
         let mut units = unit_reason.into_iter().collect::<VecDeque<_>>();
         println!("Propagating units: {:?}", &units);
         // Looping through units, if any.
-        'outer: loop {
+        loop {
             if let Some((mut l, reason)) = units.pop_front() {
                 use AssertLitResult::*;
                 println!("Propagating: {:?}, {:?}", &l, &reason);
@@ -985,7 +985,7 @@ impl CDCLState {
                     match c.find_unit() {
                         Some(ClauseLitState::Unit(l)) => {
                             units.push_back((l, Some(c)));
-                            continue 'outer;
+                            continue;
                         }
                         Some(ClauseLitState::Conflict(l)) => {
                             return Backjump(l, c);
