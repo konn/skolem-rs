@@ -1,5 +1,6 @@
 use crate::types::*;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::mem;
@@ -404,7 +405,7 @@ enum PropResult {
     Conflicting(CDCLLit, ClauseRef),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct DecisionLevel(usize);
 
 impl Add for DecisionLevel {
@@ -435,7 +436,7 @@ impl AddAssign<u64> for DecisionLevel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct Step(u64);
 
 impl Add for Step {
@@ -505,23 +506,23 @@ struct CDCLState {
     initinal_clauses: Vec<ClauseRef>,
     learnts: Vec<ClauseRef>,
     decision_steps: Vec<Step>,
-    history: Vec<Snapshot>,
+    history: Option<Vec<Snapshot>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ClauseSnapshotLit {
     lit: Literal,
     state: Option<bool>,
     watched: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ClauseSnapshot {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClauseSnapshot {
     lits: Vec<ClauseSnapshotLit>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SnapshotState {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotState {
     Propagating {
         propagating: (Literal, Option<ClauseSnapshot>),
         units_detected: Vec<(Literal, Option<ClauseSnapshot>)>,
@@ -564,8 +565,8 @@ impl SnapshotState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Snapshot {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
     decision_level: DecisionLevel,
     decision_step: Step,
     decisions: Vec<Vec<Literal>>,
@@ -585,9 +586,15 @@ fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
 }
 
 pub fn solve(cnf: &CNF) -> Option<Assignment> {
-    CDCLState::new(cnf).and_then(|v| v.solve())
+    CDCLState::new(cnf, false).and_then(|v| v.solve().0)
 }
 
+pub fn solve_with_snapshot(cnf: &CNF) -> (Option<Assignment>, Vec<Snapshot>) {
+    CDCLState::new(cnf, true).map_or((None, vec![]), |v| {
+        let (asgn, snap) = v.solve();
+        (asgn, snap.unwrap())
+    })
+}
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 enum Watcher {
     Watcher1,
@@ -609,7 +616,7 @@ enum AssertLitResult {
 }
 
 impl CDCLState {
-    fn new(CNF(cnf): &CNF) -> Option<CDCLState> {
+    fn new(CNF(cnf): &CNF, snapshot: bool) -> Option<CDCLState> {
         println!("Initialising...");
         let vars = cnf
             .iter()
@@ -703,18 +710,17 @@ impl CDCLState {
             initinal_clauses: clauses,
             learnts: Vec::new(),
             decision_steps: vec![Step(0)],
-            history: vec![],
+            history: None,
         };
-        let snapshot = ini0.snapshot(SnapshotState::Idle);
-        Some(CDCLState {
-            history: vec![snapshot],
-            ..ini0
-        })
+        let history = snapshot.then_some(vec![ini0.snapshot(SnapshotState::Idle)]);
+        Some(CDCLState { history, ..ini0 })
     }
 
     fn save_snapshot(&mut self, state: SnapshotState) {
-        let snapshot = self.snapshot(state);
-        self.history.push(snapshot);
+        if self.history.is_some() {
+            let snapshot = self.snapshot(state);
+            self.history.as_mut().unwrap().push(snapshot)
+        };
     }
 
     fn snapshot(&self, state: SnapshotState) -> Snapshot {
@@ -747,7 +753,7 @@ impl CDCLState {
         }
     }
 
-    fn solve(mut self) -> Option<Assignment> {
+    fn solve(mut self) -> (Option<Assignment>, Option<Vec<Snapshot>>) {
         let mut left_over: Option<(CDCLLit, Option<Rc<RefCell<CDCLClause>>>)> = None;
         println!("Solving: {:?}", self.initinal_clauses);
         while !self.is_satisfied() {
@@ -797,7 +803,7 @@ impl CDCLState {
                     if self.current_decision_level() == DecisionLevel(0) {
                         // Conflict at the root level. Unsatisfiable!
                         println!("!!Unsatisfiable as already at the root level!!");
-                        return None;
+                        return (None, self.history);
                     }
                     {
                         println!("Backjumping with: {:?} with {:?}", &l, &p.borrow());
@@ -812,7 +818,7 @@ impl CDCLState {
                         }
                         Failed => {
                             println!("!!!Backjump failed!!!");
-                            return None;
+                            return (None, self.history);
                         }
                     }
                 }
@@ -824,7 +830,7 @@ impl CDCLState {
         println!("---------------------");
         println!();
         self.save_snapshot(SnapshotState::Idle);
-        Some(to_assignment(self.vars))
+        (Some(to_assignment(self.vars)), self.history)
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {

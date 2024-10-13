@@ -1,13 +1,15 @@
+use serde::{Deserialize, Serialize};
+
 use crate::utils::*;
 use std::{
     collections::HashMap,
     ops::{Neg, Not},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Var(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Pos(Var),
     Neg(Var),

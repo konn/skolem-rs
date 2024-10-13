@@ -1,7 +1,10 @@
+use anyhow::{anyhow, bail, ensure, Result};
 use skolem::sat::cdcl;
 use skolem::{clause, types::*};
+use std::fs;
+use std::path::Path;
 
-pub fn main() {
+pub fn main() -> Result<()> {
     /* let cnf = CNF(vec![
         clause![-1 -2 -3 -4 5],
         clause![-3 - 4 - 6],
@@ -89,15 +92,20 @@ pub fn main() {
     println!();
     println!("------------------------");
     println!();
-    match cdcl::solve(&cnf) {
+    let (assign, snap) = cdcl::solve_with_snapshot(&cnf);
+    println!("{:?}", snap.len());
+    let path = Path::new("workspace/sat.json");
+    fs::create_dir_all(path.parent().ok_or(anyhow!("Unwrap"))?)?;
+    fs::write(path, serde_json::to_string(&snap)?)?;
+    match assign {
         Some(assign) => {
-            assert_eq!(
-                cnf.eval(&assign),
-                Some(true),
+            ensure!(
+                cnf.eval(&assign) == Some(true),
                 "MustBe true, but got: {:?}",
                 assign
-            );
+            )
         }
-        None => panic!("UNSAT"),
+        None => bail!("UNSAT"),
     }
+    Ok(())
 }
