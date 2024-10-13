@@ -213,7 +213,7 @@ impl ClauseLike for ClauseRef {
 
     fn find_unit(&mut self) -> Option<ClauseLitState> {
         use ClauseLitState::*;
-        println!("Finding unit in: {:?}", self);
+        println!("\tFinding unit in: {:?}", self);
 
         let (watcher, new_lit, satisfied) = {
             let this = self.borrow();
@@ -386,7 +386,7 @@ type VarRef = Rc<RefCell<CDCLVar>>;
 #[derive(Debug)]
 enum PropResult {
     NoProp,
-    Backjump(CDCLLit, ClauseRef),
+    Conflicting(CDCLLit, ClauseRef),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -523,6 +523,7 @@ enum BackjumpResult {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
 enum AssertLitResult {
     Asserted,
+    AlreadySatisfied,
     Contradicting,
 }
 
@@ -646,49 +647,60 @@ impl CDCLState {
                     // No propagation / conflict found.
                     // Decide indefinite variable
                     // TODO: update VSIDS state Here
-                    let v = self
-                        .vars
-                        .iter()
-                        .filter(|&(_, c)| c.borrow().value.is_none())
-                        .map(|(v, _)| v)
-                        .next();
-                    if let Some(v) = v {
-                        println!("Making decision: {:?}", &v);
+                    let v = self.vars.iter().find(|&(_, c)| {
+                        let c = c.borrow();
+                        c.value.is_none()
+                    });
+                    if let Some((var, cv)) = v {
+                        println!("Making decision: {:?}", (var, &cv.borrow()));
                         self.decision_steps.push(Step(0));
-                        let mut lit = CDCLLit {
-                            lit: Neg(*v),
-                            var: self.vars.get(v).unwrap().clone(),
+                        let lit = CDCLLit {
+                            lit: Neg(*var),
+                            var: cv.clone(),
                         };
-                        self.assert_literal(&mut lit, &None);
+                        // self.assert_literal(&mut lit, &None);
                         left_over = Some((lit, None));
                     } else {
                         // No indefinite variable found. Satisfied!
+                        println!("No indefinite variable found. Must be satisfied!");
                         break;
                     }
                 }
-                PropResult::Backjump(l, p) => {
+                PropResult::Conflicting(l, p) => {
                     use BackjumpResult::*;
                     println!("---------------");
-                    println!("Backjumping with: {:?} with {:?}", &l, &p,);
+                    {
+                        println!("Conflict found with: {:?} with {:?}", &l, &p.borrow(),);
+                    }
                     if self.current_decision_level() == DecisionLevel(0) {
                         // Conflict at the root level. Unsatisfiable!
                         println!("!!Unsatisfiable as already at the root level!!");
                         return None;
                     }
+                    {
+                        println!("Backjumping with: {:?} with {:?}", &l, &p.borrow());
+                    }
                     // Conflict found. Learn the clause.
                     match self.backjump(l, p) {
                         Jumped(l, r) => {
-                            println!("Jumped to: {:?} with {:?}", &l, &r);
+                            {
+                                println!("Jumped to: {:?} with {:?}", &l, &r.borrow());
+                            }
                             left_over = Some((l, Some(r)));
                         }
                         Failed => {
-                            println!("Backjump failed!");
+                            println!("!!!Backjump failed!!!");
                             return None;
                         }
                     }
                 }
             }
         }
+        println!();
+        println!("---------------------");
+        println!("-- END: SATISFIED ---");
+        println!("---------------------");
+        println!();
         Some(to_assignment(self.vars))
     }
 
@@ -709,6 +721,7 @@ impl CDCLState {
             .iter()
             .all(|l| Rc::ptr_eq(&l.var, &lit.var))
         {
+            println!("Backjump failed as all literals are same!");
             return BackjumpResult::Failed;
         }
         let (lit, cls) = self.learn(lit, reason);
@@ -887,10 +900,10 @@ impl CDCLState {
 
     fn assert_literal(&mut self, l: &mut CDCLLit, c: &Option<ClauseRef>) -> AssertLitResult {
         use AssertLitResult::*;
-        println!("Asserting: {:?} ({:?})", &l, &c);
+        println!("\tAsserting: {:?} ({:?})", &l, &c);
         match l.eval() {
             None => {
-                println!("Indeterminate: {:?}; asserting!", &l);
+                println!("\tIndeterminate: {:?}; asserting!", &l);
                 // TODO: update VSIDS state Here
                 let decision_step = *self.decision_steps.last().unwrap();
                 let decision_level = self.current_decision_level();
@@ -907,11 +920,11 @@ impl CDCLState {
                 Asserted
             }
             Some(true) => {
-                println!("Already satisfied: {:?}", &l);
-                Asserted
+                println!("\tAlready satisfied: {:?}", &l);
+                AlreadySatisfied
             }
             Some(false) => {
-                println!("Assertion failed; contradiction!: {:?}", &l);
+                println!("\tAssertion failed; contradiction!: {:?}", &l);
                 Contradicting
             }
         }
@@ -923,13 +936,19 @@ impl CDCLState {
         println!("Propagating units: {:?}", &units);
         // Looping through units, if any.
         loop {
+            println!("-----");
             if let Some((mut l, reason)) = units.pop_front() {
                 use AssertLitResult::*;
                 println!("Propagating: {:?}, {:?}", &l, &reason);
                 let resl = self.assert_literal(&mut l, &reason);
+                println!("\tPropation Result: {:?}", &resl);
                 match resl {
+                    AlreadySatisfied => {
+                        println!("\tAlready satisfied; continue: {:?}", &l);
+                        continue;
+                    }
                     Contradicting => {
-                        return Backjump(
+                        let jump = Conflicting(
                             l.clone(),
                             reason
                                 .or_else(|| {
@@ -941,13 +960,15 @@ impl CDCLState {
                                         .and_then(|w| w.upgrade())
                                 })
                                 .unwrap(),
-                        )
+                        );
+                        println!("\tContradiction found; backjumping with: {:?}", &jump);
+                        return jump;
                     }
                     Asserted => {
-                        println!("Asserted: {:?}.", &l);
+                        println!("\tAsserted: {:?}.", &l);
                         let watcheds = l.var.borrow().watched_by.clone();
                         println!(
-                            "Propagating {:?} to {:?}",
+                            "\tPropagating {:?} to {:?}",
                             &l,
                             &watcheds.iter().map(|c| c.upgrade()).collect::<Vec<_>>()
                         );
@@ -955,22 +976,22 @@ impl CDCLState {
                             use ClauseLitState::*;
                             // TODO: prune dangling references.
                             if let Some(mut c) = c.upgrade() {
-                                println!("Propagating {:?} to {:?}", &l, &c);
+                                println!("\tPropagating {:?} to {:?}", &l, &c);
                                 match c.propagate(&mut l) {
                                     None => {
-                                        println!("Nothing happend");
+                                        println!("\t\tNothing happend");
                                         continue;
                                     }
                                     Some(Satisfied) => {
-                                        println!("Satisfied!");
+                                        println!("\t\tSatisfied!");
                                         continue;
                                     }
                                     Some(Conflict(conf_lit)) => {
-                                        println!("Conflict found: {:?}", &conf_lit);
-                                        return Backjump(conf_lit, c);
+                                        println!("\t\tConflict found: {:?}", &conf_lit);
+                                        return Conflicting(conf_lit, c);
                                     }
                                     Some(Unit(l)) => {
-                                        println!("Unit found: {:?} ({:?})", &l, &c);
+                                        println!("\t\tUnit found: {:?} ({:?})", &l, &c);
                                         units.push_back((l, Some(c)));
                                     }
                                 }
@@ -982,17 +1003,24 @@ impl CDCLState {
                 println!("No units given. searching...");
                 // TODO: traverse unsatisfied clauses only?
                 for mut c in self.get_all_clauses_mut() {
+                    println!("\tChecking Unit for: {:?}", &c.borrow());
                     match c.find_unit() {
                         Some(ClauseLitState::Unit(l)) => {
+                            println!("\t\tUnit found: {:?} ({:?})", &l, &c);
                             units.push_back((l, Some(c)));
                             continue;
                         }
                         Some(ClauseLitState::Conflict(l)) => {
-                            return Backjump(l, c);
+                            println!("\t\tConflict found: {:?} ({:?})", &l, &c);
+                            return Conflicting(l, c);
                         }
                         // TODO: flag satisfied clauses?
-                        Some(ClauseLitState::Satisfied) => {}
-                        None => {}
+                        Some(ClauseLitState::Satisfied) => {
+                            println!("\t\tAlready satisfied.");
+                        }
+                        None => {
+                            println!("\t\tNo unit detected.");
+                        }
                     }
                 }
                 println!("No more units found. returning...");
