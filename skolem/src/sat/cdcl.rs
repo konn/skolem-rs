@@ -750,7 +750,6 @@ impl CDCLState {
                 PropResult::NoProp => {
                     // No propagation / conflict found.
                     // Decide indefinite variable
-                    // TODO: update VSIDS state Here
                     let v = self.unassigneds.pop_max();
                     if let Some((var, _, cv)) = v {
                         self.decision_steps.push(Step(0));
@@ -971,7 +970,6 @@ impl CDCLState {
         use AssertLitResult::*;
         match l.eval() {
             None => {
-                // TODO: update VSIDS state Here
                 let decision_step = *self.decision_steps.last().unwrap();
                 let decision_level = self.current_decision_level();
                 let reason = c.as_ref().map(Rc::downgrade);
