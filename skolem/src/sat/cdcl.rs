@@ -470,11 +470,12 @@ impl CDCLVar {
 
 // TODO: Adaptive Vairable Selection
 struct CDCLState {
-    vars: HashMap<Var, VarRef>,
     initinal_clauses: Vec<ClauseRef>,
     learnts: Vec<ClauseRef>,
     decision_steps: Vec<Step>,
     history: Option<Vec<Snapshot>>,
+    assigneds: PrioritySearchQueue<Var, f64, VarRef>,
+    unassigneds: PrioritySearchQueue<Var, f64, VarRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,9 +548,9 @@ pub struct Snapshot {
     pub state: SnapshotState,
 }
 
-fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
+fn to_assignment(vars: PrioritySearchQueue<Var, f64, VarRef>) -> Assignment {
     vars.into_iter()
-        .filter_map(|(v, r)| {
+        .filter_map(|(v, _, r)| {
             r.borrow()
                 .value
                 .as_ref()
@@ -590,7 +591,7 @@ enum AssertLitResult {
 
 impl CDCLState {
     fn new(CNF(cnf): &CNF, snapshot: bool) -> Option<CDCLState> {
-        let vars = cnf
+        let unassigneds = cnf
             .iter()
             .flat_map(|v| v.0.iter())
             .map(Literal::var)
@@ -598,13 +599,14 @@ impl CDCLState {
             .map(|v| {
                 (
                     v,
+                    0.0,
                     Rc::new(RefCell::new(CDCLVar {
                         watched_by: Vec::new(),
                         value: None,
                     })),
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<PrioritySearchQueue<_, f64, VarRef>>();
         let mut dups = false;
         let clauses: Vec<_> = cnf
             .iter()
@@ -636,7 +638,7 @@ impl CDCLState {
                         .unique()
                         .map(|l| CDCLLit {
                             lit: l,
-                            var: vars.get(&l.var()).unwrap().clone(),
+                            var: unassigneds.get(&l.var()).unwrap().1.clone(),
                         })
                         .collect::<Vec<_>>()
                 };
@@ -676,8 +678,10 @@ impl CDCLState {
             }),
             "Invalid watching states!"
         );
+        let num_vars = unassigneds.size();
         let ini0 = CDCLState {
-            vars,
+            unassigneds,
+            assigneds: PrioritySearchQueue::with_capacity(num_vars),
             initinal_clauses: clauses,
             learnts: Vec::new(),
             decision_steps: vec![Step(0)],
@@ -694,13 +698,20 @@ impl CDCLState {
         };
     }
 
+    fn all_vars(&self) -> impl Iterator<Item = (&Var, &VarRef)> {
+        self.unassigneds
+            .key_values_unsorted()
+            .chain(self.assigneds.key_values_unsorted())
+            .map(|(v, _, r)| (v, r))
+    }
+
     fn snapshot(&self, state: SnapshotState) -> Snapshot {
         let decision_level = self.current_decision_level();
         let decision_step = *self.decision_steps.last().unwrap();
         let mut decisions = iter::repeat_with(BTreeMap::<Step, _>::new)
             .take(decision_level.0 + 1)
             .collect::<Vec<_>>();
-        for (v, r) in &self.vars {
+        for (v, r) in self.all_vars() {
             let r = r.borrow();
             if let Some(val) = &r.value {
                 let l = if val.value { Pos(*v) } else { Neg(*v) };
@@ -738,15 +749,12 @@ impl CDCLState {
                     // No propagation / conflict found.
                     // Decide indefinite variable
                     // TODO: update VSIDS state Here
-                    let v = self.vars.iter().find(|&(_, c)| {
-                        let c = c.borrow();
-                        c.value.is_none()
-                    });
-                    if let Some((var, cv)) = v {
+                    let v = self.unassigneds.pop_max();
+                    if let Some((var, _, cv)) = v {
                         self.decision_steps.push(Step(0));
                         let lit = CDCLLit {
-                            lit: Neg(*var),
-                            var: cv.clone(),
+                            lit: Neg(var),
+                            var: cv,
                         };
                         // self.assert_literal(&mut lit, &None);
                         left_over = Some((lit, None));
@@ -776,7 +784,12 @@ impl CDCLState {
             }
         }
         self.save_snapshot(SnapshotState::Idle);
-        (Some(to_assignment(self.vars)), self.history)
+        (
+            Some(to_assignment(
+                self.assigneds.into_iter().chain(self.unassigneds).collect(),
+            )),
+            self.history,
+        )
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
@@ -863,14 +876,20 @@ impl CDCLState {
         lit.var.borrow_mut().add_watcher(Rc::downgrade(&learnt));
         self.decision_steps.truncate(jump_level.0 + 1);
         self.learnts.push(learnt.clone());
-        for v in self.vars.values() {
-            let mut v = v.borrow_mut();
-            if let Some(VarValue { decision_level, .. }) = &v.value {
+        self.assigneds.retain(|v, p, vr| {
+            let mut v_ref = vr.borrow_mut();
+            if let Some(VarValue { decision_level, .. }) = &v_ref.value {
                 if *decision_level > jump_level {
-                    v.value = None;
+                    v_ref.value = None;
+                    self.unassigneds.push(*v, *p, vr.clone());
+                    false
+                } else {
+                    true
                 }
+            } else {
+                true
             }
-        }
+        });
         (lit.clone(), learnt)
     }
 
@@ -941,6 +960,8 @@ impl CDCLState {
                 };
                 *self.decision_steps.last_mut().unwrap() += 1;
                 l.var.borrow_mut().value.replace(v);
+                self.unassigneds.delete(&l.raw_var());
+                self.assigneds.push(l.raw_var(), 0.0, l.var.clone());
                 self.save_snapshot(SnapshotState::Idle);
                 Asserted
             }
