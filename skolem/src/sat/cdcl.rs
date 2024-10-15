@@ -524,7 +524,9 @@ pub struct ClauseSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotState {
     Propagating {
-        propagating: (Literal, Option<ClauseSnapshot>),
+        unit: Literal,
+        reason: Option<ClauseSnapshot>,
+        target: Option<ClauseSnapshot>,
         units_detected: Vec<(Literal, Option<ClauseSnapshot>)>,
     },
     Backjumping {
@@ -536,12 +538,15 @@ pub enum SnapshotState {
 
 impl SnapshotState {
     fn propagating(
-        l: &CDCLLit,
+        unit: &CDCLLit,
         reason: &Option<ClauseRef>,
+        target: Option<&ClauseRef>,
         units: &VecDeque<(CDCLLit, Option<ClauseRef>)>,
     ) -> Self {
         SnapshotState::Propagating {
-            propagating: (l.lit, reason.clone().map(|l| l.borrow().snapshot())),
+            unit: unit.lit,
+            reason: reason.clone().map(|l| l.borrow().snapshot()),
+            target: target.map(|l| l.borrow().snapshot()),
             units_detected: units
                 .iter()
                 .map(|(l, r)| (l.lit, r.as_ref().map(|c| c.borrow().snapshot())))
@@ -569,7 +574,7 @@ impl SnapshotState {
 pub struct Snapshot {
     pub decision_level: DecisionLevel,
     pub decision_step: Step,
-    pub decisions: Vec<Vec<Literal>>,
+    pub decisions: Vec<Vec<(Literal, Option<Vec<Literal>>)>>,
     pub clauses: Vec<ClauseSnapshot>,
     pub state: SnapshotState,
 }
@@ -726,14 +731,18 @@ impl CDCLState {
     fn snapshot(&self, state: SnapshotState) -> Snapshot {
         let decision_level = self.current_decision_level();
         let decision_step = *self.decision_steps.last().unwrap();
-        let mut decisions = iter::repeat_with(BTreeMap::<Step, Literal>::new)
+        let mut decisions = iter::repeat_with(BTreeMap::<Step, _>::new)
             .take(decision_level.0 + 1)
             .collect::<Vec<_>>();
         for (v, r) in &self.vars {
             let r = r.borrow();
             if let Some(val) = &r.value {
                 let l = if val.value { Pos(*v) } else { Neg(*v) };
-                decisions[val.decision_level.0].insert(val.decision_step, l);
+                let reason = val.reason.clone().and_then(|c| {
+                    c.upgrade()
+                        .map(|c| c.borrow().lits.iter().map(|l| l.lit).collect())
+                });
+                decisions[val.decision_level.0].insert(val.decision_step, (l, reason));
             }
         }
         let decisions = decisions
@@ -938,7 +947,7 @@ impl CDCLState {
             self.save_snapshot(SnapshotState::backjumping(&lit, &leftover, &learnt));
         }
         println!("-----");
-        lit = !lit;
+        lit = if lit.eval() == Some(true) { !lit } else { lit };
         println!(
             "Backjumping(final): lit = {:?}, leftover = {:?}, learnt = {:?}",
             &lit, &leftover, &learnt
@@ -1077,7 +1086,7 @@ impl CDCLState {
         loop {
             println!("-----");
             if let Some((mut l, reason)) = units.pop_front() {
-                let state = SnapshotState::propagating(&l, &reason, &units);
+                let state = SnapshotState::propagating(&l, &reason, None, &units);
                 self.save_snapshot(state);
                 use AssertLitResult::*;
                 println!("Propagating: {:?}, {:?}", &l, &reason);
@@ -1118,34 +1127,52 @@ impl CDCLState {
                             // TODO: prune dangling references.
                             if let Some(mut c) = c.upgrade() {
                                 println!("\tPropagating {:?} to {:?}", &l, &c);
+                                self.save_snapshot(SnapshotState::propagating(
+                                    &l,
+                                    &reason,
+                                    Some(&c),
+                                    &units,
+                                ));
                                 let result = c.propagate(&mut l);
                                 match result {
                                     None => {
                                         println!("\t\tNothing happend");
                                         self.save_snapshot(SnapshotState::propagating(
-                                            &l, &reason, &units,
+                                            &l,
+                                            &reason,
+                                            Some(&c),
+                                            &units,
                                         ));
                                         continue;
                                     }
                                     Some(Satisfied) => {
                                         println!("\t\tSatisfied!");
                                         self.save_snapshot(SnapshotState::propagating(
-                                            &l, &reason, &units,
+                                            &l,
+                                            &reason,
+                                            Some(&c),
+                                            &units,
                                         ));
                                         continue;
                                     }
                                     Some(Conflict(conf_lit)) => {
                                         println!("\t\tConflict found: {:?}", &conf_lit);
                                         self.save_snapshot(SnapshotState::propagating(
-                                            &l, &reason, &units,
+                                            &l,
+                                            &reason,
+                                            Some(&c),
+                                            &units,
                                         ));
                                         return Conflicting(conf_lit, c);
                                     }
                                     Some(Unit(l2)) => {
                                         println!("\t\tUnit found: {:?} ({:?})", &l, &c);
-                                        units.push_back((l2, Some(c)));
+                                        units.push_back((l2, Some(c.clone())));
                                         self.save_snapshot(SnapshotState::propagating(
-                                            &l, &reason, &units,
+                                            &l,
+                                            &reason,
+                                            Some(&c),
+                                            &units,
                                         ));
                                     }
                                 }

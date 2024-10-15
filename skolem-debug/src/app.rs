@@ -1,5 +1,6 @@
 use gloo::events::EventListener;
-use skolem::sat::cdcl::*;
+use itertools::Itertools;
+use skolem::{sat::cdcl::*, types::Literal};
 use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
@@ -46,6 +47,11 @@ pub struct WebClause {
 }
 
 #[derive(Properties, PartialEq)]
+pub struct WebState {
+    state: SnapshotState,
+}
+
+#[derive(Properties, PartialEq)]
 pub struct WebLit {
     lit: ClauseSnapshotLit,
 }
@@ -80,10 +86,85 @@ pub fn Clause(WebClause { clause }: &WebClause) -> Html {
     }
 }
 
+fn fmt_lit(l: &Literal) -> String {
+    match l {
+        Literal::Pos(v) => format!("{}", v.0),
+        Literal::Neg(v) => format!("-{}", v.0),
+    }
+}
+
+#[function_component]
+pub fn State(WebState { state }: &WebState) -> Html {
+    use SnapshotState::*;
+    let state = match state {
+        Idle => html! { {"Idle"} },
+        Backjumping {
+            conflicting,
+            resolution,
+        } => {
+            html! { <> {"Backjumping: "} <span class="lit">{fmt_lit(conflicting)}</span> {": ("} {for resolution.iter().map(|l| html!{<span class="lit"> {fmt_lit(l)} </span>})} {")"}  </> }
+        }
+        Propagating {
+            unit: l,
+            reason,
+            target,
+            units_detected,
+        } => {
+            let reason = match reason {
+                None => html! {},
+                Some(clause) => {
+                    html! { <> {" reason: "} <Clause ..WebClause{clause: clause.clone()} /> </> }
+                }
+            };
+            let target = match target {
+                None => html! {},
+                Some(target) => {
+                    html! { <> {" to target: "} <Clause ..WebClause{clause: target.clone()} /> </> }
+                }
+            };
+            html! { <> {"Propagating: "} <span class="lit">{fmt_lit(l)}</span> {reason} {target} {"(remaining: units: "} {for units_detected.iter().map(|(l, _)| html!{<span class="lit">{fmt_lit(l)}</span>})} {")"} </>  }
+        }
+    };
+    html! {
+        <div class="state">{ "State: "} { state }</div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+pub struct Decs {
+    pub decs: Vec<Vec<(Literal, Option<Vec<Literal>>)>>,
+}
+
+#[function_component]
+pub fn Assignemt(Decs { decs }: &Decs) -> Html {
+    html! {
+        <>
+        { for decs.iter().map(|seq| html!{
+            <>
+                {for seq.iter().map(|(l, reason)|  {
+                    let reason = if let Some(reason) = reason {
+                        format!("({})", reason.iter().map(|l| fmt_lit(l)).intersperse(", ".to_string()).collect::<String>())
+                    } else {
+                        "Dec Var".to_string()
+                    };
+                    let reason = html!{<span class="tooltip-text">{reason}</span>};
+                    let clss = classes!("lit", "tooltip");
+                    html!{<span class={clss}>{reason}{fmt_lit(l)}</span>}
+                })}
+            </>
+        }).intersperse("|".into())}
+        </>
+    }
+}
+
 #[function_component(App)]
 pub fn app(History { history }: &History) -> Html {
     let counter = use_state(|| 0);
     let size = history.len();
+    let snapshot = {
+        let history = history.clone();
+        use_memo(counter.clone(), move |idx| history[**idx].clone())
+    };
 
     let onclick = {
         let counter = counter.clone();
@@ -108,16 +189,20 @@ pub fn app(History { history }: &History) -> Html {
     }
 
     html! {
-        <>
+        <div>
             <main>
                 <ul>
-                    { for history[*counter].clauses.iter().cloned().map(|clause| html!{ <Clause  ..WebClause{clause} />})}
+                    { for snapshot.clauses.iter().cloned().map(|clause| html!{ <Clause  ..WebClause{clause} />})}
                 </ul>
+                <State .. WebState{state: (*snapshot).clone().state} />
+                <Assignemt .. Decs{decs: (*snapshot).clone().decisions} />
             </main>
-            <div class="hooter">
-                <button {onclick}>{ "+1" }</button>
-                <span>{ *counter } { " / " } { size }</span>
-            </div>
-        </>
+            <footer>
+                <p>
+                    <button {onclick}>{ "+1" }</button>
+                    <span>{ *counter } { " / " } { size }</span>
+                </p>
+            </footer>
+        </div>
     }
 }
