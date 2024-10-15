@@ -63,7 +63,7 @@ impl<K: PartialOrd, V> Heap<K, V> {
         }
     }
 
-    pub fn peek(&self, idx: Index) -> Option<(&K, &V)> {
+    pub fn peek(&self, idx: &Index) -> Option<(&K, &V)> {
         idx.0
             .upgrade()
             .and_then(|i| self.heap.get(*i.borrow()).map(|(k, v, _)| (k, v)))

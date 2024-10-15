@@ -22,12 +22,47 @@ where
         }
     }
 
+    /// Iterates over the keys and values _regardless of_ the priority.
+    pub fn key_values_unsorted(&self) -> impl Iterator<Item = (&K, &P, &A)> {
+        self.dic
+            .iter()
+            .map(|(k, (v, i))| (k, self.queue.peek(i).unwrap().0, v))
+    }
+
+    pub fn size(&self) -> usize {
+        self.queue.size()
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        PrioritySearchQueue {
+            queue: Heap::with_capacity(capacity),
+            dic: HashMap::with_capacity(capacity),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
     pub fn len(&self) -> usize {
         self.dic.len()
+    }
+}
+
+impl<K, P, A> FromIterator<(K, P, A)> for PrioritySearchQueue<K, P, A>
+where
+    K: Eq + Hash + Clone,
+    P: PartialOrd + Copy,
+{
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (K, P, A)>,
+    {
+        let mut queue = Self::new();
+        for (k, p, a) in iter.into_iter() {
+            queue.push(k, p, a);
+        }
+        queue
     }
 }
 
@@ -61,13 +96,22 @@ where
 {
     pub fn push(&mut self, key: K, priority: P, value: A) {
         let idx = self.queue.push(priority, key.clone());
-        self.dic.insert(key, (value, idx));
+        if let Some((_, idx)) = self.dic.insert(key, (value, idx)) {
+            self.queue.delete(idx);
+        }
     }
 
     pub fn pop_max(&mut self) -> Option<(K, P, A)> {
         self.queue
             .pop_max()
             .map(|(weight, key)| (key.clone(), weight, self.dic.remove(&key).unwrap().0))
+    }
+
+    pub fn get(&self, k: &K) -> Option<(&P, &A)> {
+        self.dic.get(k).map(|(x, i)| {
+            let (p, _) = self.queue.peek(i).unwrap();
+            (p, x)
+        })
     }
 
     pub fn peek_max(&self) -> Option<(&K, &P, &A)> {
@@ -108,5 +152,31 @@ where
 {
     fn sub_assign(&mut self, rhs: P) {
         self.queue -= rhs;
+    }
+}
+
+pub struct IntoIter<K, P, V>(PrioritySearchQueue<K, P, V>);
+
+impl<K, P, V> Iterator for IntoIter<K, P, V>
+where
+    P: PartialOrd,
+    K: Clone + Hash + Eq,
+{
+    type Item = (K, P, V);
+    fn next(&mut self) -> Option<(K, P, V)> {
+        self.0.pop_max()
+    }
+}
+
+impl<K: Hash + Eq, P: PartialOrd, V> IntoIterator for PrioritySearchQueue<K, P, V>
+where
+    P: PartialOrd,
+    K: Clone + Hash + Eq,
+{
+    type Item = (K, P, V);
+    type IntoIter = IntoIter<K, P, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter(self)
     }
 }
