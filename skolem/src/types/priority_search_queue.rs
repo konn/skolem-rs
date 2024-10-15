@@ -47,6 +47,20 @@ where
     pub fn len(&self) -> usize {
         self.dic.len()
     }
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &P, &mut A) -> bool,
+    {
+        self.dic.retain(|k, (v, i)| {
+            let p = self.queue.peek(i).unwrap().0;
+            let hold = f(k, p, v);
+            if !hold {
+                self.queue.delete(i.clone());
+            }
+            hold
+        });
+    }
 }
 
 impl<K, P, A> FromIterator<(K, P, A)> for PrioritySearchQueue<K, P, A>
