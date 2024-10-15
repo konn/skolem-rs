@@ -1,8 +1,9 @@
 use super::heap::*;
 use core::hash::Hash;
 use std::{
-    collections::HashMap,
-    ops::{AddAssign, MulAssign, SubAssign},
+    collections::{hash_map, HashMap},
+    marker::PhantomData,
+    ops::{Add, AddAssign, DivAssign, MulAssign, SubAssign},
 };
 
 pub struct PrioritySearchQueue<K, P, A> {
@@ -10,7 +11,45 @@ pub struct PrioritySearchQueue<K, P, A> {
     dic: HashMap<K, (A, Index)>,
 }
 
-impl<K, P, A> PrioritySearchQueue<K, P, A>
+pub struct Entry<'a, K, P, V> {
+    inner: hash_map::Entry<'a, K, (V, Index)>,
+    table: &'a mut Heap<P, K>,
+}
+
+impl<K, P, V> Entry<'_, K, P, V> {
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V),
+    {
+        let Entry { inner, table } = self;
+        Entry {
+            inner: inner.and_modify(|(k, _)| f(k)),
+            table,
+        }
+    }
+}
+
+impl<K, P, V> AddAssign<P> for Entry<'_, K, P, V>
+where
+    P: PartialOrd + Add<Output = P> + Copy,
+    V: Clone,
+{
+    fn add_assign(&mut self, rhs: P) {
+        let Entry { inner, table } = self;
+        match inner {
+            hash_map::Entry::Occupied(ref mut entry) => {
+                let (v, idx) = entry.get();
+                if let Some((p, k)) = table.delete(idx.clone()) {
+                    let idx = table.push(p + rhs, k);
+                    entry.insert((v.clone(), idx));
+                }
+            }
+            hash_map::Entry::Vacant(_) => {}
+        }
+    }
+}
+
+impl<K, P, V> PrioritySearchQueue<K, P, V>
 where
     K: Eq + Hash + Clone,
     P: PartialOrd + Copy,
@@ -23,7 +62,7 @@ where
     }
 
     /// Iterates over the keys and values _regardless of_ the priority.
-    pub fn key_values_unsorted(&self) -> impl Iterator<Item = (&K, &P, &A)> {
+    pub fn key_values_unsorted(&self) -> impl Iterator<Item = (&K, &P, &V)> {
         self.dic
             .iter()
             .map(|(k, (v, i))| (k, self.queue.peek(i).unwrap().0, v))
@@ -31,6 +70,18 @@ where
 
     pub fn size(&self) -> usize {
         self.queue.size()
+    }
+
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, P, V> {
+        let entry = self.dic.entry(key);
+        let PrioritySearchQueue {
+            queue: ref mut table,
+            ..
+        } = self;
+        Entry {
+            inner: entry,
+            table,
+        }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
@@ -50,7 +101,7 @@ where
 
     pub fn retain<F>(&mut self, mut f: F)
     where
-        F: FnMut(&K, &P, &mut A) -> bool,
+        F: FnMut(&K, &P, &mut V) -> bool,
     {
         self.dic.retain(|k, (v, i)| {
             let p = self.queue.peek(i).unwrap().0;
@@ -148,6 +199,14 @@ where
 {
     fn mul_assign(&mut self, rhs: f64) {
         self.queue *= rhs;
+    }
+}
+impl<K, P, A> DivAssign<f64> for PrioritySearchQueue<K, P, A>
+where
+    P: PartialOrd + From<f64> + DivAssign + Copy,
+{
+    fn div_assign(&mut self, rhs: f64) {
+        self.queue /= rhs.into();
     }
 }
 

@@ -476,6 +476,7 @@ struct CDCLState {
     history: Option<Vec<Snapshot>>,
     assigneds: PrioritySearchQueue<Var, f64, VarRef>,
     unassigneds: PrioritySearchQueue<Var, f64, VarRef>,
+    next_priority: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -686,6 +687,7 @@ impl CDCLState {
             learnts: Vec::new(),
             decision_steps: vec![Step(0)],
             history: None,
+            next_priority: 1.0,
         };
         let history = snapshot.then_some(vec![ini0.snapshot(SnapshotState::Idle)]);
         Some(CDCLState { history, ..ini0 })
@@ -801,8 +803,43 @@ impl CDCLState {
         {
             return BackjumpResult::Failed;
         }
-        let (lit, cls) = self.learn(lit, reason);
-        BackjumpResult::Jumped(lit, cls)
+        self.decay_priority();
+        let (jump_level, lit, learnt) = self.find_1_uip(lit, reason);
+        for l in learnt.borrow().lits.iter() {
+            let mut entry = self.assigneds.entry(l.raw_var());
+            entry += self.next_priority;
+            let mut entry = self.unassigneds.entry(l.raw_var());
+            entry += self.next_priority;
+        }
+
+        lit.var.borrow_mut().add_watcher(Rc::downgrade(&learnt));
+        self.decision_steps.truncate(jump_level.0 + 1);
+        self.learnts.push(learnt.clone());
+        self.assigneds.retain(|v, p, vr| {
+            let mut v_ref = vr.borrow_mut();
+            if let Some(VarValue { decision_level, .. }) = &v_ref.value {
+                if *decision_level > jump_level {
+                    v_ref.value = None;
+                    self.unassigneds.push(*v, *p, vr.clone());
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        });
+        BackjumpResult::Jumped(lit, learnt)
+    }
+
+    fn decay_priority(&mut self) {
+        // Instead of tweak all the priorities, we can just increase the next priority.
+        self.next_priority /= 0.95;
+        if self.next_priority > 1e20 {
+            self.next_priority = 1.0;
+            self.assigneds /= 1e20;
+            self.unassigneds /= 1e20;
+        }
     }
 
     /*
@@ -826,7 +863,11 @@ impl CDCLState {
             3. If there are more than one literals decided in level L, pick the last one and repeat (1).
             4. Otherwise, the only literal decided in level L is 1-UIP.
     */
-    fn learn(&mut self, mut lit: CDCLLit, p: ClauseRef) -> (CDCLLit, ClauseRef) {
+    fn find_1_uip(
+        &mut self,
+        mut lit: CDCLLit,
+        p: ClauseRef,
+    ) -> (DecisionLevel, CDCLLit, ClauseRef) {
         let (mut leftover, mut learnt) = self.classify(
             p.borrow()
                 .lits
@@ -873,28 +914,11 @@ impl CDCLState {
             watching2,
         }));
 
-        lit.var.borrow_mut().add_watcher(Rc::downgrade(&learnt));
-        self.decision_steps.truncate(jump_level.0 + 1);
-        self.learnts.push(learnt.clone());
-        self.assigneds.retain(|v, p, vr| {
-            let mut v_ref = vr.borrow_mut();
-            if let Some(VarValue { decision_level, .. }) = &v_ref.value {
-                if *decision_level > jump_level {
-                    v_ref.value = None;
-                    self.unassigneds.push(*v, *p, vr.clone());
-                    false
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        });
-        (lit.clone(), learnt)
+        (jump_level, lit.clone(), learnt)
     }
 
     fn classify(
-        &mut self,
+        &self,
         lits: impl Iterator<Item = CDCLLit>,
     ) -> (BTreeMap<Step, CDCLLit>, HashMap<Literal, CDCLLit>) {
         let level = self.current_decision_level();
