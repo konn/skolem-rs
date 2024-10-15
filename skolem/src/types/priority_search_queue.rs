@@ -2,7 +2,6 @@ use super::heap::*;
 use core::hash::Hash;
 use std::{
     collections::{hash_map, HashMap},
-    marker::PhantomData,
     ops::{Add, AddAssign, DivAssign, MulAssign, SubAssign},
 };
 
