@@ -122,13 +122,6 @@ impl CDCLClause {
         self.lits[i].var.borrow_mut()
     }
 
-    fn get_watcher(&self, w: Watcher) -> usize {
-        match w {
-            Watcher1 => self.watching1,
-            Watcher2 => self.watching2.unwrap(),
-        }
-    }
-
     fn get_watch1_lit(&self) -> Literal {
         self.get(self.watching1)
     }
@@ -206,12 +199,6 @@ trait ClauseLike {
 
 impl ClauseLike for ClauseRef {
     fn switch_watcher_to(&mut self, w: Watcher, l: usize) {
-        println!(
-            "Switching watcher: {:?} to {:?} ({:?})",
-            &w,
-            &l,
-            self.borrow()
-        );
         let mut this = self.borrow_mut();
         debug_assert!(
             this.watching1 != l && this.watching2 != Some(l),
@@ -229,7 +216,6 @@ impl ClauseLike for ClauseRef {
 
     fn find_unit(&mut self) -> Option<ClauseLitState> {
         use ClauseLitState::*;
-        println!("\tFinding unit in: {:?}", self);
 
         let (watcher, new_lit, satisfied) = {
             let this = self.borrow();
@@ -287,17 +273,12 @@ impl ClauseLike for ClauseRef {
                 }
             }
         };
-        println!(
-            "Switching watcher (sat: {:?}): {:?} to {:?}",
-            &satisfied, &watcher, &new_lit
-        );
         self.switch_watcher_to(watcher, new_lit);
         satisfied.then_some(Satisfied)
     }
 
     // Invariant: lit must be watched literal of self.
     fn propagate(&mut self, lit: &mut CDCLLit) -> Option<ClauseLitState> {
-        println!("Propagating: {:?} in {:?}", &lit.lit, self);
         use ClauseLitState::*;
         {
             let v1 = self.borrow().get_watch1_lit().var();
@@ -382,13 +363,6 @@ impl ClauseLike for ClauseRef {
                 }
             }
         };
-        println!(
-            "Switching watcher (sat: {:?}): {:?} to {:?} (original: {:?})",
-            &satisfied,
-            &watcher,
-            &new_lit,
-            self.borrow().get_watcher(watcher)
-        );
         self.switch_watcher_to(watcher, new_lit);
         satisfied.then_some(Satisfied)
     }
@@ -483,21 +457,13 @@ struct CDCLVar {
 
 impl CDCLVar {
     fn add_watcher(&mut self, clause: ClauseWeakRef) {
-        println!("Adding watcher: {:?} to {:?}", &clause.upgrade(), self);
         self.watched_by.push(clause);
     }
 
     // Removes watching clause from the list, along with staled clauses.
     fn remove_watcher(&mut self, clause: &ClauseRef) {
-        println!("Removing watcher: {:?} from {:?}", &clause, self);
-        self.watched_by.retain(|w| {
-            w.upgrade().is_some_and(|c| {
-                if Rc::ptr_eq(&c, clause) {
-                    println!("Removing!: {:?}", &c);
-                }
-                !Rc::ptr_eq(&c, clause)
-            })
-        });
+        self.watched_by
+            .retain(|w| w.upgrade().is_some_and(|c| !Rc::ptr_eq(&c, clause)));
     }
 }
 
@@ -622,7 +588,6 @@ enum AssertLitResult {
 
 impl CDCLState {
     fn new(CNF(cnf): &CNF, snapshot: bool) -> Option<CDCLState> {
-        println!("Initialising...");
         let vars = cnf
             .iter()
             .flat_map(|v| v.0.iter())
@@ -695,7 +660,6 @@ impl CDCLState {
             })
             .try_collect::<_, _, ()>()
             .ok()?;
-        println!("Initialised.");
         debug_assert!(
             clauses.iter().all(|c_ref| {
                 iter::once(c_ref.borrow().get_watch1())
@@ -764,23 +728,11 @@ impl CDCLState {
 
     fn solve(mut self) -> (Option<Assignment>, Option<Vec<Snapshot>>) {
         let mut left_over: Option<(CDCLLit, Option<Rc<RefCell<CDCLClause>>>)> = None;
-        println!("Solving: {:?}", self.initinal_clauses);
         while !self.is_satisfied() {
-            println!();
-            println!("------------------------------------");
-            println!("--- Next ---------------------------");
-            println!("------------------------------------");
-            println!();
-            println!("left_over: {:?}", &left_over);
-            println!("current_level: {:?}", &self.current_decision_level());
             let rule = self.propagate_units(left_over.take());
 
-            println!("current_level: {:?}", &self.current_decision_level());
-            println!("Rule: {:?}", rule);
             match rule {
                 PropResult::NoProp => {
-                    println!("---------------");
-                    println!("No propagation occurred.");
                     // No propagation / conflict found.
                     // Decide indefinite variable
                     // TODO: update VSIDS state Here
@@ -789,7 +741,6 @@ impl CDCLState {
                         c.value.is_none()
                     });
                     if let Some((var, cv)) = v {
-                        println!("Making decision: {:?}", (var, &cv.borrow()));
                         self.decision_steps.push(Step(0));
                         let lit = CDCLLit {
                             lit: Neg(*var),
@@ -799,67 +750,40 @@ impl CDCLState {
                         left_over = Some((lit, None));
                     } else {
                         // No indefinite variable found. Satisfied!
-                        println!("No indefinite variable found. Must be satisfied!");
                         break;
                     }
                 }
                 PropResult::Conflicting(l, p) => {
                     use BackjumpResult::*;
-                    println!("---------------");
-                    {
-                        println!("Conflict found with: {:?} with {:?}", &l, &p.borrow(),);
-                    }
                     if self.current_decision_level() == DecisionLevel(0) {
                         // Conflict at the root level. Unsatisfiable!
-                        println!("!!Unsatisfiable as already at the root level!!");
                         return (None, self.history);
                     }
-                    {
-                        println!("Backjumping with: {:?} with {:?}", &l, &p.borrow());
-                    }
+                    {}
                     // Conflict found. Learn the clause.
                     match self.backjump(l, p) {
                         Jumped(l, r) => {
-                            {
-                                println!("Jumped to: {:?} with {:?}", &l, &r.borrow());
-                            }
+                            {}
                             left_over = Some((l, Some(r)));
                         }
                         Failed => {
-                            println!("!!!Backjump failed!!!");
                             return (None, self.history);
                         }
                     }
                 }
             }
         }
-        println!();
-        println!("---------------------");
-        println!("-- END: SATISFIED ---");
-        println!("---------------------");
-        println!();
         self.save_snapshot(SnapshotState::Idle);
         (Some(to_assignment(self.vars)), self.history)
     }
 
     fn backjump(&mut self, lit: CDCLLit, reason: ClauseRef) -> BackjumpResult {
-        println!(
-            "Backjump started with: {:?} with reason {:?}",
-            lit,
-            reason
-                .borrow()
-                .lits
-                .iter()
-                .map(|l| l.lit)
-                .collect::<Vec<_>>()
-        );
         if reason
             .borrow()
             .lits
             .iter()
             .all(|l| Rc::ptr_eq(&l.var, &lit.var))
         {
-            println!("Backjump failed as all literals are same!");
             return BackjumpResult::Failed;
         }
         let (lit, cls) = self.learn(lit, reason);
@@ -888,7 +812,6 @@ impl CDCLState {
             4. Otherwise, the only literal decided in level L is 1-UIP.
     */
     fn learn(&mut self, mut lit: CDCLLit, p: ClauseRef) -> (CDCLLit, ClauseRef) {
-        let final_level = self.current_decision_level();
         let (mut leftover, mut learnt) = self.classify(
             p.borrow()
                 .lits
@@ -897,35 +820,12 @@ impl CDCLState {
                 .cloned(),
         );
         self.save_snapshot(SnapshotState::backjumping(&lit, &leftover, &learnt));
-        println!("----------");
-        println!(
-            "Backjumping(init): lit = {:?}, clause = {:?}",
-            &lit.lit,
-            &p.borrow().lits.iter().map(|l| l.lit).collect::<Vec<_>>()
-        );
         debug_assert!(p.borrow().lits.iter().any(|l| l.var.borrow().value.as_ref().map_or(true, |v| v.decision_level == self.current_decision_level())),
             "Conflicting clause {:?} must contain at least one literal decided in this decision level {:?}, but none!",
             &p.borrow().lits.iter().map(|l| (l.clone(), l.var.borrow().value.as_ref().map(|v| v.decision_level))).collect::<Vec<_>>(),
             &self.current_decision_level()
         );
-        println!(
-            "Backjumping(init): lit = {:?}, leftover = {:?}, learnt = {:?}",
-            &lit, &leftover, &learnt
-        );
         while !leftover.is_empty() {
-            println!("-----");
-            println!(
-                "Backjumping(-): lit = {:?}, leftover = {:?}, learnt = {:?}",
-                &lit, &leftover, &learnt
-            );
-            println!(
-                "Literal variable reason: {:?}",
-                &lit.var
-                    .borrow()
-                    .value
-                    .as_ref()
-                    .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()))
-            );
             let pair = lit
                 .var
                 .borrow()
@@ -933,25 +833,17 @@ impl CDCLState {
                 .as_ref()
                 .and_then(|v| v.reason.as_ref().and_then(|v| v.upgrade()))
                 .map(|p| p.borrow().lits.to_vec());
-            println!("Resolving with {:?}", &pair);
 
-            println!("Pair: {:?}", &pair);
             if let Some(cls) = pair {
                 let (lo, older) =
                     self.classify(cls.iter().filter(|l| l.raw_var() != lit.raw_var()).cloned());
-                println!("Incoming leftover = {:?}, learnt = {:?}", &lo, &older);
                 learnt.extend(older);
                 leftover.extend(lo.into_iter());
             }
             lit = leftover.pop_last().unwrap().1;
             self.save_snapshot(SnapshotState::backjumping(&lit, &leftover, &learnt));
         }
-        println!("-----");
         lit = if lit.eval() == Some(true) { !lit } else { lit };
-        println!(
-            "Backjumping(final): lit = {:?}, leftover = {:?}, learnt = {:?}",
-            &lit, &leftover, &learnt
-        );
         let jump_level = learnt
             .values()
             .filter_map(|l| l.var.borrow().value.as_ref().map(|v| v.decision_level))
@@ -968,17 +860,6 @@ impl CDCLState {
 
         lit.var.borrow_mut().add_watcher(Rc::downgrade(&learnt));
         self.decision_steps.truncate(jump_level.0 + 1);
-        println!("Learned: {:?} with Clause {:?}", lit, &learnt);
-        println!(
-            "Clause variable levels (curent = {:?}): {:?}",
-            &final_level,
-            &learnt
-                .borrow()
-                .lits
-                .iter()
-                .map(|l| l.var.borrow().value.as_ref().map(|v| v.decision_level))
-                .collect::<Vec<_>>()
-        );
         self.learnts.push(learnt.clone());
         for v in self.vars.values() {
             let mut v = v.borrow_mut();
@@ -988,10 +869,6 @@ impl CDCLState {
                 }
             }
         }
-        println!(
-            "Jumped to level: {:?} = {:?}",
-            &jump_level, &self.decision_steps
-        );
         (lit.clone(), learnt)
     }
 
@@ -1047,10 +924,8 @@ impl CDCLState {
 
     fn assert_literal(&mut self, l: &mut CDCLLit, c: &Option<ClauseRef>) -> AssertLitResult {
         use AssertLitResult::*;
-        println!("\tAsserting: {:?} ({:?})", &l, &c);
         match l.eval() {
             None => {
-                println!("\tIndeterminate: {:?}; asserting!", &l);
                 // TODO: update VSIDS state Here
                 let decision_step = *self.decision_steps.last().unwrap();
                 let decision_level = self.current_decision_level();
@@ -1067,36 +942,23 @@ impl CDCLState {
                 self.save_snapshot(SnapshotState::Idle);
                 Asserted
             }
-            Some(true) => {
-                println!("\tAlready satisfied: {:?}", &l);
-                AlreadySatisfied
-            }
-            Some(false) => {
-                println!("\tAssertion failed; contradiction!: {:?}", &l);
-                Contradicting
-            }
+            Some(true) => AlreadySatisfied,
+            Some(false) => Contradicting,
         }
     }
 
     fn propagate_units(&mut self, unit_reason: Option<(CDCLLit, Option<ClauseRef>)>) -> PropResult {
         use PropResult::*;
         let mut units = unit_reason.into_iter().collect::<VecDeque<_>>();
-        println!("Propagating units: {:?}", &units);
         // Looping through units, if any.
         loop {
-            println!("-----");
             if let Some((mut l, reason)) = units.pop_front() {
                 let state = SnapshotState::propagating(&l, &reason, None, &units);
                 self.save_snapshot(state);
                 use AssertLitResult::*;
-                println!("Propagating: {:?}, {:?}", &l, &reason);
                 let resl = self.assert_literal(&mut l, &reason);
-                println!("\tPropation Result: {:?}", &resl);
                 match resl {
-                    AlreadySatisfied => {
-                        println!("\tAlready satisfied; continue: {:?}", &l);
-                        continue;
-                    }
+                    AlreadySatisfied => continue,
                     Contradicting => {
                         let jump = Conflicting(
                             l.clone(),
@@ -1111,22 +973,14 @@ impl CDCLState {
                                 })
                                 .unwrap(),
                         );
-                        println!("\tContradiction found; backjumping with: {:?}", &jump);
                         return jump;
                     }
                     Asserted => {
-                        println!("\tAsserted: {:?}.", &l);
                         let watcheds = l.var.borrow().watched_by.clone();
-                        println!(
-                            "\tPropagating {:?} to {:?}",
-                            &l,
-                            &watcheds.iter().map(|c| c.upgrade()).collect::<Vec<_>>()
-                        );
                         for c in watcheds {
                             use ClauseLitState::*;
                             // TODO: prune dangling references.
                             if let Some(mut c) = c.upgrade() {
-                                println!("\tPropagating {:?} to {:?}", &l, &c);
                                 self.save_snapshot(SnapshotState::propagating(
                                     &l,
                                     &reason,
@@ -1136,7 +990,6 @@ impl CDCLState {
                                 let result = c.propagate(&mut l);
                                 match result {
                                     None => {
-                                        println!("\t\tNothing happend");
                                         self.save_snapshot(SnapshotState::propagating(
                                             &l,
                                             &reason,
@@ -1146,7 +999,6 @@ impl CDCLState {
                                         continue;
                                     }
                                     Some(Satisfied) => {
-                                        println!("\t\tSatisfied!");
                                         self.save_snapshot(SnapshotState::propagating(
                                             &l,
                                             &reason,
@@ -1156,7 +1008,6 @@ impl CDCLState {
                                         continue;
                                     }
                                     Some(Conflict(conf_lit)) => {
-                                        println!("\t\tConflict found: {:?}", &conf_lit);
                                         self.save_snapshot(SnapshotState::propagating(
                                             &l,
                                             &reason,
@@ -1166,7 +1017,6 @@ impl CDCLState {
                                         return Conflicting(conf_lit, c);
                                     }
                                     Some(Unit(l2)) => {
-                                        println!("\t\tUnit found: {:?} ({:?})", &l, &c);
                                         units.push_back((l2, Some(c.clone())));
                                         self.save_snapshot(SnapshotState::propagating(
                                             &l,
@@ -1181,30 +1031,21 @@ impl CDCLState {
                     }
                 }
             } else {
-                println!("No units given. searching...");
                 // TODO: traverse unsatisfied clauses only?
                 for mut c in self.get_all_clauses_mut() {
-                    println!("\tChecking Unit for: {:?}", &c.borrow());
                     match c.find_unit() {
                         Some(ClauseLitState::Unit(l)) => {
-                            println!("\t\tUnit found: {:?} ({:?})", &l, &c);
                             units.push_back((l, Some(c)));
                             continue;
                         }
                         Some(ClauseLitState::Conflict(l)) => {
-                            println!("\t\tConflict found: {:?} ({:?})", &l, &c);
                             return Conflicting(l, c);
                         }
                         // TODO: flag satisfied clauses?
-                        Some(ClauseLitState::Satisfied) => {
-                            println!("\t\tAlready satisfied.");
-                        }
-                        None => {
-                            println!("\t\tNo unit detected.");
-                        }
+                        Some(ClauseLitState::Satisfied) => {}
+                        None => {}
                     }
                 }
-                println!("No more units found. returning...");
                 return NoProp;
             }
         }
@@ -1219,16 +1060,14 @@ mod tests {
 
     #[test]
     fn test_solve_files() {
-        println!("Testing...");
         let files = std::fs::read_dir(Path::new("data/uf20-91"))
             .expect("Failed to read directory")
             .map(|f| f.unwrap().path())
             .collect::<Vec<_>>();
         for targ in files {
-            println!("Target: {:?}", &targ);
             let cnf = CNF::parse(&std::fs::read_to_string(&targ).unwrap()).unwrap();
             // for cnf in files {
-            //println!("Target: {cnf:?}");
+            //debug_println!("Target: {cnf:?}");
             let answer = solve(&cnf);
             assert!(
                 answer.is_some(),
