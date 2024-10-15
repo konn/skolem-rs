@@ -35,6 +35,6 @@ jobs:
           ${{runner.os}}-build-target-${{hashFiles('**/Cargo.lock')}}-
           ${{runner.os}}-build-target-
     - name: Build
-      run: cargo build --verbose
+      run: cargo build -p skolem --verbose
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test -p skolem --verbose
