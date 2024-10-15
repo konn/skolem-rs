@@ -1,0 +1,36 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  padding: 10pt;
+  display: flex;
+
+  font-size: 1.5rem;
+}
+
+main {
+  font-family: sans-serif;
+}
+
+.lit {
+  margin: 5pt;
+  padding: 1pt;
+}
+
+.true {
+  color: green;
+  font-weight: bold;
+}
+
+.false {
+  color: gray;
+}
+
+.watched {
+  text-decoration: underline;
+  text-decoration-color: blue;
+  text-decoration-thickness: 2pt;
+}

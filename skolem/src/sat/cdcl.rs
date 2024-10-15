@@ -406,7 +406,7 @@ enum PropResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-struct DecisionLevel(usize);
+pub struct DecisionLevel(usize);
 
 impl Add for DecisionLevel {
     type Output = DecisionLevel;
@@ -437,7 +437,7 @@ impl AddAssign<u64> for DecisionLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-struct Step(u64);
+pub struct Step(u64);
 
 impl Add for Step {
     type Output = Step;
@@ -510,15 +510,15 @@ struct CDCLState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ClauseSnapshotLit {
-    lit: Literal,
-    state: Option<bool>,
-    watched: bool,
+pub struct ClauseSnapshotLit {
+    pub lit: Literal,
+    pub state: Option<bool>,
+    pub watched: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClauseSnapshot {
-    lits: Vec<ClauseSnapshotLit>,
+    pub lits: Vec<ClauseSnapshotLit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,11 +567,11 @@ impl SnapshotState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
-    decision_level: DecisionLevel,
-    decision_step: Step,
-    decisions: Vec<Vec<Literal>>,
-    clauses: Vec<ClauseSnapshot>,
-    state: SnapshotState,
+    pub decision_level: DecisionLevel,
+    pub decision_step: Step,
+    pub decisions: Vec<Vec<Literal>>,
+    pub clauses: Vec<ClauseSnapshot>,
+    pub state: SnapshotState,
 }
 
 fn to_assignment(vars: HashMap<Var, VarRef>) -> Assignment {
