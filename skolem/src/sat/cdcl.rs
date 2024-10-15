@@ -984,8 +984,11 @@ impl CDCLState {
                 };
                 *self.decision_steps.last_mut().unwrap() += 1;
                 l.var.borrow_mut().value.replace(v);
-                self.unassigneds.delete(&l.raw_var());
-                self.assigneds.push(l.raw_var(), 0.0, l.var.clone());
+                let p = self
+                    .unassigneds
+                    .delete(&l.raw_var())
+                    .map_or(0.0, |(p, _)| p);
+                self.assigneds.push(l.raw_var(), p, l.var.clone());
                 self.save_snapshot(SnapshotState::Idle);
                 Asserted
             }
