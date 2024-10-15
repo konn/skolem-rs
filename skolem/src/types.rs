@@ -125,6 +125,7 @@ mod tests {
     }
 }
 
+pub mod heap;
 pub mod priority_search_queue;
 
 #[macro_export]

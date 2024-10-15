@@ -1,36 +1,13 @@
+use super::heap::*;
 use core::hash::Hash;
 use std::{
-    cmp::Ordering,
-    collections::{BinaryHeap, HashMap},
+    collections::HashMap,
+    ops::{AddAssign, MulAssign, SubAssign},
 };
 
-struct Weighted<P, A> {
-    weight: P,
-    entry: A,
-}
-
-impl<P: Eq, A> Eq for Weighted<P, A> {}
-impl<P: PartialEq, A> PartialEq for Weighted<P, A> {
-    fn eq(&self, other: &Self) -> bool {
-        self.weight == other.weight
-    }
-}
-
-impl<P: Ord, A> PartialOrd for Weighted<P, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<P: Ord, A> Ord for Weighted<P, A> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.weight.cmp(&other.weight)
-    }
-}
-
 pub struct PrioritySearchQueue<K, P, A> {
-    queue: BinaryHeap<Weighted<P, K>>,
-    dic: HashMap<K, A>,
+    queue: Heap<P, K>,
+    dic: HashMap<K, (A, Index)>,
 }
 
 impl<K, P, A> PrioritySearchQueue<K, P, A>
@@ -40,7 +17,7 @@ where
 {
     pub fn new() -> Self {
         PrioritySearchQueue {
-            queue: BinaryHeap::new(),
+            queue: Heap::new(),
             dic: HashMap::new(),
         }
     }
@@ -70,35 +47,66 @@ where
     P: Ord + Copy,
 {
     pub fn delete(&mut self, key: &K) -> Option<(P, A)> {
-        self.dic.remove(key).map(|value| {
-            let mut prio: Option<P> = None;
-            self.queue.retain(|Weighted { entry, weight }| {
-                if entry != key {
-                    prio = Some(*weight);
-                    false
-                } else {
-                    true
-                }
-            });
-            (prio.unwrap(), value)
+        self.dic.remove(key).map(|(value, idx)| {
+            let (p, _) = self.queue.delete(idx).unwrap();
+            (p, value)
         })
     }
 }
+
 impl<K, P, A> PrioritySearchQueue<K, P, A>
 where
     P: Ord,
     K: Clone + Hash + Eq,
 {
     pub fn push(&mut self, key: K, priority: P, value: A) {
-        self.dic.insert(key.clone(), value);
-        self.queue.push(Weighted {
-            weight: priority,
-            entry: key,
-        });
+        let idx = self.queue.push(priority, key.clone());
+        self.dic.insert(key, (value, idx));
     }
-    pub fn pop(&mut self) -> Option<(K, P, A)> {
-        self.queue.pop().map(|Weighted { weight, entry }| {
-            (entry.clone(), weight, self.dic.remove(&entry).unwrap())
+
+    pub fn pop_max(&mut self) -> Option<(K, P, A)> {
+        self.queue
+            .pop_max()
+            .map(|(weight, key)| (key.clone(), weight, self.dic.remove(&key).unwrap().0))
+    }
+
+    pub fn peek_max(&self) -> Option<(&K, &P, &A)> {
+        self.queue
+            .peek_max()
+            .map(|(weight, key)| (key, weight, &self.dic[key].0))
+    }
+
+    pub fn remove(&mut self, key: K) -> Option<(P, A)> {
+        self.dic.remove(&key).map(|(value, idx)| {
+            let (p, _) = self.queue.delete(idx).unwrap();
+            (p, value)
         })
+    }
+}
+
+impl<K, P, A> MulAssign<f64> for PrioritySearchQueue<K, P, A>
+where
+    P: Ord + From<f64> + MulAssign + Copy,
+{
+    fn mul_assign(&mut self, rhs: f64) {
+        self.queue *= rhs;
+    }
+}
+
+impl<K, P, A> AddAssign<P> for PrioritySearchQueue<K, P, A>
+where
+    P: Ord + From<f64> + AddAssign + Copy,
+{
+    fn add_assign(&mut self, rhs: P) {
+        self.queue += rhs;
+    }
+}
+
+impl<K, P, A> SubAssign<P> for PrioritySearchQueue<K, P, A>
+where
+    P: Ord + From<f64> + SubAssign + Copy,
+{
+    fn sub_assign(&mut self, rhs: P) {
+        self.queue -= rhs;
     }
 }
