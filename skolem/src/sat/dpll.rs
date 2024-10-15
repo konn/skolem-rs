@@ -171,7 +171,6 @@ mod tests {
             .collect::<Vec<_>>();
         // let files = vec![Path::new("data/uf20-91/uf20-0778.cnf")];
         for targ in files {
-            println!("Target: {targ:?}");
             let cnf = CNF::parse(&std::fs::read_to_string(targ).unwrap()).unwrap();
             let answer = solve(&cnf);
             assert!(answer.is_some());
