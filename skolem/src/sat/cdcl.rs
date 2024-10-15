@@ -1,5 +1,6 @@
 use crate::types::*;
 use itertools::Itertools;
+use priority_search_queue::PrioritySearchQueue;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -467,6 +468,7 @@ impl CDCLVar {
     }
 }
 
+// TODO: Adaptive Vairable Selection
 struct CDCLState {
     vars: HashMap<Var, VarRef>,
     initinal_clauses: Vec<ClauseRef>,

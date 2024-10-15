@@ -34,7 +34,7 @@ fn right_child_idx(i: usize) -> usize {
     2 * (i + 1)
 }
 
-impl<K: Ord, V> std::iter::Iterator for IntoIter<K, V> {
+impl<K: PartialOrd, V> std::iter::Iterator for IntoIter<K, V> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -48,7 +48,7 @@ impl<K, V> Heap<K, V> {
     }
 }
 
-impl<K: Ord, V> Heap<K, V> {
+impl<K: PartialOrd, V> Heap<K, V> {
     pub fn new() -> Self {
         Heap {
             heap: Vec::with_capacity(64),
@@ -210,7 +210,7 @@ impl<K: Ord, V> Heap<K, V> {
     }
 }
 
-impl<K: MulAssign + Ord + Copy + From<f64>, V> Heap<K, V> {
+impl<K: MulAssign + PartialOrd + Copy + From<f64>, V> Heap<K, V> {
     pub fn scale_priority(&mut self, factor: f64) {
         if factor < 0.0 {
             panic!("factor must be non-negative");
@@ -219,43 +219,43 @@ impl<K: MulAssign + Ord + Copy + From<f64>, V> Heap<K, V> {
     }
 }
 
-impl<K: AddAssign + Ord + Copy, V> Heap<K, V> {
+impl<K: AddAssign + PartialOrd + Copy, V> Heap<K, V> {
     pub fn increase_priority(&mut self, factor: K) {
         self.map_monotonic(|k| *k += factor);
     }
 }
 
-impl<K: MulAssign + Ord + Copy + From<f64>, V> MulAssign<f64> for Heap<K, V> {
+impl<K: MulAssign + PartialOrd + Copy + From<f64>, V> MulAssign<f64> for Heap<K, V> {
     fn mul_assign(&mut self, rhs: f64) {
         self.scale_priority(rhs);
     }
 }
 
-impl<K: AddAssign + Ord + Copy, V> AddAssign<K> for Heap<K, V> {
+impl<K: AddAssign + PartialOrd + Copy, V> AddAssign<K> for Heap<K, V> {
     fn add_assign(&mut self, rhs: K) {
         self.increase_priority(rhs);
     }
 }
 
-impl<K: SubAssign + Ord + Copy, V> SubAssign<K> for Heap<K, V> {
+impl<K: SubAssign + PartialOrd + Copy, V> SubAssign<K> for Heap<K, V> {
     fn sub_assign(&mut self, rhs: K) {
         self.map_monotonic(|k| *k -= rhs);
     }
 }
 
-impl<K: DivAssign + Ord + Copy, V> DivAssign<K> for Heap<K, V> {
+impl<K: DivAssign + PartialOrd + Copy, V> DivAssign<K> for Heap<K, V> {
     fn div_assign(&mut self, rhs: K) {
         self.map_monotonic(|k| *k /= rhs);
     }
 }
 
-impl<K: Ord, V> Default for Heap<K, V> {
+impl<K: PartialOrd, V> Default for Heap<K, V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Ord, V> IntoIterator for Heap<K, V> {
+impl<K: PartialOrd, V> IntoIterator for Heap<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
 

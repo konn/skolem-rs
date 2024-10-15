@@ -13,7 +13,7 @@ pub struct PrioritySearchQueue<K, P, A> {
 impl<K, P, A> PrioritySearchQueue<K, P, A>
 where
     K: Eq + Hash + Clone,
-    P: Ord + Copy,
+    P: PartialOrd + Copy,
 {
     pub fn new() -> Self {
         PrioritySearchQueue {
@@ -34,7 +34,7 @@ where
 impl<K, P, A> Default for PrioritySearchQueue<K, P, A>
 where
     K: Eq + Hash + Clone,
-    P: Ord + Copy,
+    P: PartialOrd + Copy,
 {
     fn default() -> Self {
         Self::new()
@@ -44,7 +44,7 @@ where
 impl<K, P, A> PrioritySearchQueue<K, P, A>
 where
     K: Hash + Eq,
-    P: Ord + Copy,
+    P: PartialOrd + Copy,
 {
     pub fn delete(&mut self, key: &K) -> Option<(P, A)> {
         self.dic.remove(key).map(|(value, idx)| {
@@ -56,7 +56,7 @@ where
 
 impl<K, P, A> PrioritySearchQueue<K, P, A>
 where
-    P: Ord,
+    P: PartialOrd,
     K: Clone + Hash + Eq,
 {
     pub fn push(&mut self, key: K, priority: P, value: A) {
@@ -86,7 +86,7 @@ where
 
 impl<K, P, A> MulAssign<f64> for PrioritySearchQueue<K, P, A>
 where
-    P: Ord + From<f64> + MulAssign + Copy,
+    P: PartialOrd + From<f64> + MulAssign + Copy,
 {
     fn mul_assign(&mut self, rhs: f64) {
         self.queue *= rhs;
@@ -95,7 +95,7 @@ where
 
 impl<K, P, A> AddAssign<P> for PrioritySearchQueue<K, P, A>
 where
-    P: Ord + From<f64> + AddAssign + Copy,
+    P: PartialOrd + From<f64> + AddAssign + Copy,
 {
     fn add_assign(&mut self, rhs: P) {
         self.queue += rhs;
@@ -104,7 +104,7 @@ where
 
 impl<K, P, A> SubAssign<P> for PrioritySearchQueue<K, P, A>
 where
-    P: Ord + From<f64> + SubAssign + Copy,
+    P: PartialOrd + From<f64> + SubAssign + Copy,
 {
     fn sub_assign(&mut self, rhs: P) {
         self.queue -= rhs;
